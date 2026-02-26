@@ -202,15 +202,11 @@ tempfile = "3"
 
 The tests use `Engine::in_memory()` exclusively. The `tempfile` crate is not referenced anywhere in the test files. It should be removed to keep dependencies minimal, or a test using file-backed storage should be added (which would also improve coverage of `Engine::open()`).
 
-### 12. `Engine::open()` should accept `impl AsRef<Path>`, not `&str`
+### ~~12. `Engine::open()` should accept `impl AsRef<Path>`, not `&str`~~ ✓ FIXED
 
-**File:** `src/engine.rs:42`
+**Fixed in:** `witt3rd/open-accept-path` branch
 
-```rust
-pub fn open(path: &str) -> Result<Self> {
-```
-
-Idiomatic Rust file-opening APIs accept `impl AsRef<Path>` to work with `&str`, `String`, `PathBuf`, and `&Path`. This is a minor ergonomics point.
+Both `Engine::open()` and `Storage::open()` now accept `impl AsRef<std::path::Path>` instead of `&str`, matching idiomatic Rust file-opening APIs. Callers can pass `&str`, `String`, `PathBuf`, or `&Path` without conversion.
 
 ### 13. `NewWorkItem` has all `pub` fields -- builder pattern partially undermined
 

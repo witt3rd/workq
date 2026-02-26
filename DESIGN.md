@@ -1,6 +1,6 @@
 # Work Engine Design
 
-*Adapted from the [animus bus_new spec](~/src/witt3rd/animus/spec/bus_new.md), which is the original design document that seeded this project.*
+*Adapted from the original bus_new spec, which seeded this project.*
 
 ## The Core Reframe
 

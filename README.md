@@ -52,7 +52,7 @@ Git hooks run tests and clippy on every commit (configured via `.githooks/`).
 
 ## Design
 
-See the [design spec](../animus/spec/bus_new.md) in the animus repo for the full vision. Key principles:
+See [DESIGN.md](DESIGN.md) for the full design spec. Key principles:
 
 1. **Work has identity** — structural dedup keys prevent the same work from executing twice
 2. **Work, not messages** — no from/to routing; the engine schedules work to workers
