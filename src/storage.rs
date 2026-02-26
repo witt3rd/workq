@@ -4,7 +4,7 @@
 //! WAL mode for concurrent read access. All writes go through the engine.
 
 use chrono::Utc;
-use rusqlite::{params, Connection, OptionalExtension};
+use rusqlite::{Connection, OptionalExtension, params};
 
 use crate::error::{Error, Result};
 use crate::event::{Event, EventKind};
@@ -194,11 +194,7 @@ impl Storage {
     }
 
     /// Find active (non-terminal) work items matching a dedup key.
-    pub fn find_active_by_dedup(
-        &self,
-        work_type: &str,
-        dedup_key: &str,
-    ) -> Result<Vec<WorkItem>> {
+    pub fn find_active_by_dedup(&self, work_type: &str, dedup_key: &str) -> Result<Vec<WorkItem>> {
         let mut stmt = self.conn.prepare(
             "SELECT * FROM work_items
              WHERE work_type = ?1 AND dedup_key = ?2
@@ -207,7 +203,9 @@ impl Storage {
         )?;
 
         let items = stmt
-            .query_map(params![work_type, dedup_key], |row| Ok(row_to_work_item(row)))?
+            .query_map(params![work_type, dedup_key], |row| {
+                Ok(row_to_work_item(row))
+            })?
             .collect::<std::result::Result<Vec<_>, _>>()?;
 
         // Unwrap the inner Results
@@ -365,9 +363,9 @@ impl Storage {
 
     /// Get events since a sequence number.
     pub fn get_events_since(&self, since_seq: u64) -> Result<Vec<Event>> {
-        let mut stmt = self.conn.prepare(
-            "SELECT seq, timestamp, kind FROM events WHERE seq > ?1 ORDER BY seq ASC",
-        )?;
+        let mut stmt = self
+            .conn
+            .prepare("SELECT seq, timestamp, kind FROM events WHERE seq > ?1 ORDER BY seq ASC")?;
 
         let events = stmt
             .query_map(params![since_seq as i64], |row| {

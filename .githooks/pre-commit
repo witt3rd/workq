@@ -1,6 +1,9 @@
 #!/bin/bash
 set -e
 
+echo "=== pre-commit: cargo fmt ==="
+cargo fmt -- --check
+
 echo "=== pre-commit: cargo test ==="
 cargo test --quiet
 

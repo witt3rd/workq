@@ -23,7 +23,10 @@ pub enum SubmitResult {
     /// New work item created and queued.
     Created(WorkItem),
     /// Merged into an existing work item (dedup hit).
-    Merged { new_id: WorkId, canonical_id: WorkId },
+    Merged {
+        new_id: WorkId,
+        canonical_id: WorkId,
+    },
 }
 
 impl Engine {

@@ -119,7 +119,7 @@ impl State {
                 | (Running, Completed)
                 | (Running, Failed)
                 | (Failed, Queued)      // retry
-                | (Failed, Dead)        // exhausted retries
+                | (Failed, Dead) // exhausted retries
         )
     }
 

@@ -17,8 +17,8 @@
 //! - **Events**: every state transition emits a structured event.
 //! - **Logs**: workers write logs scoped to their work item.
 
+pub mod engine;
 pub mod error;
 pub mod event;
 pub mod model;
 pub mod storage;
-pub mod engine;

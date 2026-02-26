@@ -50,7 +50,10 @@ fn full_lifecycle_submit_claim_start_complete() {
     let id = item.id;
 
     // Claim
-    let claimed = engine.claim("worker-1").unwrap().expect("should claim work");
+    let claimed = engine
+        .claim("worker-1")
+        .unwrap()
+        .expect("should claim work");
     assert_eq!(claimed.id, id);
     assert_eq!(claimed.state, State::Claimed);
 
@@ -115,10 +118,7 @@ fn structural_dedup_merges_duplicate_work() {
         .unwrap();
 
     match second {
-        SubmitResult::Merged {
-            canonical_id,
-            ..
-        } => {
+        SubmitResult::Merged { canonical_id, .. } => {
             assert_eq!(canonical_id, first.id);
         }
         SubmitResult::Created(_) => panic!("expected Merged, got Created"),
@@ -135,17 +135,11 @@ fn different_dedup_keys_are_not_merged() {
     let mut engine = test_engine();
 
     engine
-        .submit(
-            NewWorkItem::new("project-check", "heartbeat")
-                .dedup_key("project=garden"),
-        )
+        .submit(NewWorkItem::new("project-check", "heartbeat").dedup_key("project=garden"))
         .unwrap();
 
     let second = engine
-        .submit(
-            NewWorkItem::new("project-check", "heartbeat")
-                .dedup_key("project=kitchen"),
-        )
+        .submit(NewWorkItem::new("project-check", "heartbeat").dedup_key("project=kitchen"))
         .unwrap();
 
     assert!(matches!(second, SubmitResult::Created(_)));
@@ -178,9 +172,7 @@ fn retryable_failure_requeues() {
     let mut engine = test_engine();
 
     let item = match engine
-        .submit(
-            NewWorkItem::new("flaky-work", "test").max_attempts(3),
-        )
+        .submit(NewWorkItem::new("flaky-work", "test").max_attempts(3))
         .unwrap()
     {
         SubmitResult::Created(item) => item,
@@ -206,10 +198,7 @@ fn retryable_failure_requeues() {
 fn non_retryable_failure_goes_dead() {
     let mut engine = test_engine();
 
-    let item = match engine
-        .submit(NewWorkItem::new("bad-work", "test"))
-        .unwrap()
-    {
+    let item = match engine.submit(NewWorkItem::new("bad-work", "test")).unwrap() {
         SubmitResult::Created(item) => item,
         _ => panic!("expected Created"),
     };
@@ -228,9 +217,7 @@ fn exhausted_retries_goes_dead() {
     let mut engine = test_engine();
 
     let item = match engine
-        .submit(
-            NewWorkItem::new("flaky-work", "test").max_attempts(2),
-        )
+        .submit(NewWorkItem::new("flaky-work", "test").max_attempts(2))
         .unwrap()
     {
         SubmitResult::Created(item) => item,
@@ -269,7 +256,9 @@ fn work_scoped_logs() {
     let id = item.id;
 
     engine.log(id, LogLevel::Info, "starting work").unwrap();
-    engine.log(id, LogLevel::Debug, "querying database").unwrap();
+    engine
+        .log(id, LogLevel::Debug, "querying database")
+        .unwrap();
     engine
         .log(id, LogLevel::Error, "something went wrong")
         .unwrap();

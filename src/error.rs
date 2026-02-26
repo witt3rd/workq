@@ -8,7 +8,10 @@ pub enum Error {
     NotFound(String),
 
     #[error("invalid state transition: {from:?} -> {to:?}")]
-    InvalidTransition { from: crate::model::State, to: crate::model::State },
+    InvalidTransition {
+        from: crate::model::State,
+        to: crate::model::State,
+    },
 
     #[error("storage error: {0}")]
     Storage(#[from] rusqlite::Error),
