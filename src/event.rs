@@ -71,4 +71,7 @@ pub enum EventKind {
         from: State,
         to: State,
     },
+    Unknown {
+        raw: String,
+    },
 }

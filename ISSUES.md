@@ -49,18 +49,11 @@ These touch different functions but share storage.rs, so merge conflicts are pos
 
 `merge_work_item_on()` now validates `can_transition_to(State::Merged)` before writing and uses `State::Merged.to_string()` instead of a hardcoded string literal.
 
-### 3. `unwrap()` calls in library code parsing paths
+### ~~3. `unwrap()` calls in library code parsing paths~~ ✓ FIXED
 
-**File:** `src/storage.rs`
+**Fixed in:** `witt3rd/fix-unwrap-parsing` branch
 
-Several `unwrap()` calls exist in the storage parsing layer that can panic on malformed database data:
-
-- Line 130: `serde_json::to_string(&item.params).unwrap_or_default()` -- This is fine (serialization of valid JSON won't fail).
-- Line 323: `row.get::<_, String>(0)?.parse().unwrap()` -- Panics if a work_id in the logs table is not a valid UUID.
-- Line 357: `serde_json::to_string(&event.kind).unwrap_or_default()` -- Fine.
-- Line 379: `serde_json::from_str(&kind_str).unwrap_or(EventKind::WorkCreated { ... })` -- The fallback fabricates a fake `WorkCreated` event with a random ID. This silently corrupts the event stream rather than surfacing the error.
-
-**Recommendation:** Replace `unwrap()` with proper error propagation. For the event deserialization fallback, either propagate the error or use a dedicated `EventKind::Unknown { raw: String }` variant so consumers can handle it.
+The UUID `.parse().unwrap()` in `get_logs()` now uses `.map_err()` to propagate the error as `rusqlite::Error::FromSqlConversionFailure`. The event deserialization fallback in `get_events_since()` now uses `EventKind::Unknown { raw: String }` instead of fabricating a fake `WorkCreated` event, preserving the original string for consumers to handle.
 
 ---
 
