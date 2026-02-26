@@ -215,13 +215,13 @@ impl std::fmt::Display for LogLevel {
 
 /// Builder for creating new work items. The engine's public API for submitting work.
 pub struct NewWorkItem {
-    pub work_type: String,
-    pub dedup_key: Option<String>,
-    pub provenance: Provenance,
-    pub params: serde_json::Value,
-    pub priority: i32,
-    pub parent_id: Option<WorkId>,
-    pub max_attempts: Option<u32>,
+    pub(crate) work_type: String,
+    pub(crate) dedup_key: Option<String>,
+    pub(crate) provenance: Provenance,
+    pub(crate) params: serde_json::Value,
+    pub(crate) priority: i32,
+    pub(crate) parent_id: Option<WorkId>,
+    pub(crate) max_attempts: Option<u32>,
 }
 
 impl NewWorkItem {
