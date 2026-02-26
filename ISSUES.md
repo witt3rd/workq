@@ -119,23 +119,11 @@ If the process crashes between steps 2 and 4, the item is stuck in `Failed` with
 
 **Recommendation:** Wrap these methods using the existing `storage.with_transaction()` pattern. This is especially important for `fail()`.
 
-### 7. `event_seq` in `Storage` can diverge from the database
+### ~~7. `event_seq` in `Storage` can diverge from the database~~ ✓ FIXED
 
-**File:** `src/storage.rs:342-361`
+**Fixed in:** `witt3rd/update-issues-md` branch
 
-```rust
-pub fn record_event(&mut self, kind: EventKind) -> Result<Event> {
-    self.event_seq += 1;
-    // ...
-    self.conn.execute(
-        "INSERT INTO events (seq, timestamp, kind) VALUES (?1, ?2, ?3)",
-        params![event.seq as i64, ...],
-    )?;
-```
-
-The `event_seq` field is incremented in memory before the INSERT. If the INSERT fails (e.g., disk full), the in-memory counter is already advanced but no row exists. Subsequent events will have a gap in their sequence numbers. Worse, if two `Storage` instances point at the same database file, their `event_seq` counters will collide.
-
-**Recommendation:** Use `AUTOINCREMENT` on the `seq` column (it already has it as `INTEGER PRIMARY KEY AUTOINCREMENT`) and let SQLite assign the sequence. Read back the assigned value with `last_insert_rowid()`. Remove the in-memory `event_seq` field entirely.
+Removed the in-memory `event_seq` field from `Storage` and `TxContext`. Event sequence numbers are now assigned by SQLite's `AUTOINCREMENT` and read back via `last_insert_rowid()`. The `with_transaction` snapshot/restore logic was also simplified since there's no in-memory counter to manage.
 
 ### 8. `outcome_ms` cast from `u64` to `i64` can overflow
 
@@ -196,16 +184,12 @@ Removed the unused `tempfile` dev-dependency from `Cargo.toml`. Tests use `Engin
 
 Both `Engine::open()` and `Storage::open()` now accept `impl AsRef<std::path::Path>` instead of `&str`, matching idiomatic Rust file-opening APIs. Callers can pass `&str`, `String`, `PathBuf`, or `&Path` without conversion.
 
-### 13. `NewWorkItem` has all `pub` fields -- builder pattern partially undermined
+### ~~13. `NewWorkItem` has all `pub` fields -- builder pattern partially undermined~~ ✓ FIXED
 
-**File:** `src/model.rs:217-225`
+**Fixed in:** `witt3rd/encapsulate-new-work-item` branch
 
-The builder pattern (fluent `.dedup_key().priority()` API) is good, but all fields are `pub`, meaning callers can construct `NewWorkItem` directly without the builder. This is fine for now since there are no invariants to enforce on `NewWorkItem`, but if you later add validation (e.g., work_type must be non-empty), the pub fields provide a bypass.
+All `NewWorkItem` fields are now `pub(crate)`. The builder pattern is the only external construction path.
 
-**Recommendation:** Consider making fields `pub(crate)` and adding getters if external consumers need read access.
+### ~~14. Edition 2024 limits compatibility to Rust 1.85+~~ ✗ WON'T FIX
 
-### 14. Edition 2024 limits compatibility to Rust 1.85+
-
-**File:** `Cargo.toml:4`
-
-Rust edition 2024 is very recent. This is fine if you control all consumers and their toolchains, but it limits compatibility with older Rust versions. Just be aware that users of this library must have Rust 1.85+.
+All consumers use current toolchains. No compatibility concern.
