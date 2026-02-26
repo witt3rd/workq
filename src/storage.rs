@@ -16,6 +16,42 @@ pub struct Storage {
     event_seq: u64,
 }
 
+/// Handle for performing storage operations within a transaction.
+///
+/// All methods delegate to the same SQL logic as `Storage`, but execute
+/// against the transaction's connection. This ensures atomicity — either
+/// all operations commit together or none do.
+pub(crate) struct TxContext<'a> {
+    tx: &'a Connection,
+    event_seq: &'a mut u64,
+}
+
+impl TxContext<'_> {
+    pub fn insert_work_item(&self, item: &WorkItem) -> Result<()> {
+        insert_work_item_on(self.tx, item)
+    }
+
+    pub fn get_work_item(&self, id: WorkId) -> Result<WorkItem> {
+        get_work_item_on(self.tx, id)
+    }
+
+    pub fn update_state(&self, id: WorkId, new_state: State) -> Result<State> {
+        update_state_on(self.tx, id, new_state)
+    }
+
+    pub fn find_active_by_dedup(&self, work_type: &str, dedup_key: &str) -> Result<Vec<WorkItem>> {
+        find_active_by_dedup_on(self.tx, work_type, dedup_key)
+    }
+
+    pub fn merge_work_item(&self, id: WorkId, canonical_id: WorkId) -> Result<()> {
+        merge_work_item_on(self.tx, id, canonical_id)
+    }
+
+    pub fn record_event(&mut self, kind: EventKind) -> Result<Event> {
+        record_event_on(self.tx, self.event_seq, kind)
+    }
+}
+
 impl Storage {
     /// Open or create a database at the given path.
     pub fn open(path: &str) -> Result<Self> {
@@ -110,110 +146,52 @@ impl Storage {
     }
 
     // -----------------------------------------------------------------------
+    // Transactions
+    // -----------------------------------------------------------------------
+
+    /// Execute a closure within a SQLite transaction.
+    ///
+    /// The transaction commits if the closure returns Ok, rolls back on Err.
+    /// The event sequence counter is snapshotted before the transaction and
+    /// only updated on successful commit.
+    pub(crate) fn with_transaction<F, T>(&mut self, f: F) -> Result<T>
+    where
+        F: FnOnce(&mut TxContext) -> Result<T>,
+    {
+        let tx = self.conn.transaction()?;
+        let mut local_seq = self.event_seq;
+        let mut ctx = TxContext {
+            tx: &tx,
+            event_seq: &mut local_seq,
+        };
+        let result = f(&mut ctx)?;
+        tx.commit()?;
+        self.event_seq = local_seq;
+        Ok(result)
+    }
+
+    // -----------------------------------------------------------------------
     // Work Items
     // -----------------------------------------------------------------------
 
     /// Insert a new work item.
     pub fn insert_work_item(&mut self, item: &WorkItem) -> Result<()> {
-        self.conn.execute(
-            "INSERT INTO work_items (
-                id, work_type, dedup_key, source, trigger_, params, priority,
-                state, merged_into, parent_id, attempts, max_attempts,
-                created_at, updated_at
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
-            params![
-                item.id.0.to_string(),
-                item.work_type,
-                item.dedup_key,
-                item.provenance.source,
-                item.provenance.trigger,
-                serde_json::to_string(&item.params).unwrap_or_default(),
-                item.priority,
-                item.state.to_string(),
-                item.merged_into.map(|id| id.0.to_string()),
-                item.parent_id.map(|id| id.0.to_string()),
-                item.attempts,
-                item.max_attempts,
-                item.created_at.to_rfc3339(),
-                item.updated_at.to_rfc3339(),
-            ],
-        )?;
-        Ok(())
+        insert_work_item_on(&self.conn, item)
     }
 
     /// Update a work item's state. Returns the previous state.
     pub fn update_state(&mut self, id: WorkId, new_state: State) -> Result<State> {
-        let old_state = self.get_state(id)?;
-
-        if !old_state.can_transition_to(new_state) {
-            return Err(Error::InvalidTransition {
-                from: old_state,
-                to: new_state,
-            });
-        }
-
-        let now = Utc::now().to_rfc3339();
-        let completed_at = if new_state.is_terminal() {
-            Some(now.clone())
-        } else {
-            None
-        };
-
-        self.conn.execute(
-            "UPDATE work_items SET state = ?1, updated_at = ?2, completed_at = COALESCE(?3, completed_at) WHERE id = ?4",
-            params![new_state.to_string(), now, completed_at, id.0.to_string()],
-        )?;
-
-        Ok(old_state)
-    }
-
-    /// Get the current state of a work item.
-    fn get_state(&self, id: WorkId) -> Result<State> {
-        let state_str: String = self
-            .conn
-            .query_row(
-                "SELECT state FROM work_items WHERE id = ?1",
-                params![id.0.to_string()],
-                |row| row.get(0),
-            )
-            .optional()?
-            .ok_or_else(|| Error::NotFound(id.to_string()))?;
-
-        parse_state(&state_str)
+        update_state_on(&self.conn, id, new_state)
     }
 
     /// Get a work item by ID.
     pub fn get_work_item(&self, id: WorkId) -> Result<WorkItem> {
-        self.conn
-            .query_row(
-                "SELECT * FROM work_items WHERE id = ?1",
-                params![id.0.to_string()],
-                |row| Ok(row_to_work_item(row)),
-            )?
-            .map_err(|e| Error::Other(format!("failed to parse work item: {e}")))
+        get_work_item_on(&self.conn, id)
     }
 
     /// Find active (non-terminal) work items matching a dedup key.
     pub fn find_active_by_dedup(&self, work_type: &str, dedup_key: &str) -> Result<Vec<WorkItem>> {
-        let mut stmt = self.conn.prepare(
-            "SELECT * FROM work_items
-             WHERE work_type = ?1 AND dedup_key = ?2
-             AND state NOT IN ('completed', 'dead', 'merged')
-             ORDER BY created_at ASC",
-        )?;
-
-        let items = stmt
-            .query_map(params![work_type, dedup_key], |row| {
-                Ok(row_to_work_item(row))
-            })?
-            .collect::<std::result::Result<Vec<_>, _>>()?;
-
-        // Unwrap the inner Results
-        let mut result = Vec::new();
-        for item in items {
-            result.push(item.map_err(|e| Error::Other(format!("parse error: {e}")))?);
-        }
-        Ok(result)
+        find_active_by_dedup_on(&self.conn, work_type, dedup_key)
     }
 
     /// List work items by state.
@@ -235,29 +213,7 @@ impl Storage {
 
     /// Set merged_into and record the merged provenance.
     pub fn merge_work_item(&mut self, id: WorkId, canonical_id: WorkId) -> Result<()> {
-        // Get the item being merged so we can preserve its provenance
-        let item = self.get_work_item(id)?;
-
-        // Record merged provenance on the canonical item
-        self.conn.execute(
-            "INSERT INTO merged_provenance (work_id, source, trigger_, created_at)
-             VALUES (?1, ?2, ?3, ?4)",
-            params![
-                canonical_id.0.to_string(),
-                item.provenance.source,
-                item.provenance.trigger,
-                item.created_at.to_rfc3339(),
-            ],
-        )?;
-
-        // Update the merged item
-        let now = Utc::now().to_rfc3339();
-        self.conn.execute(
-            "UPDATE work_items SET state = 'merged', merged_into = ?1, updated_at = ?2, completed_at = ?2 WHERE id = ?3",
-            params![canonical_id.0.to_string(), now, id.0.to_string()],
-        )?;
-
-        Ok(())
+        merge_work_item_on(&self.conn, id, canonical_id)
     }
 
     /// Increment attempt count.
@@ -340,25 +296,7 @@ impl Storage {
 
     /// Record an event and return it with its sequence number.
     pub fn record_event(&mut self, kind: EventKind) -> Result<Event> {
-        self.event_seq += 1;
-        let now = Utc::now();
-
-        let event = Event {
-            seq: self.event_seq,
-            timestamp: now,
-            kind: kind.clone(),
-        };
-
-        self.conn.execute(
-            "INSERT INTO events (seq, timestamp, kind) VALUES (?1, ?2, ?3)",
-            params![
-                event.seq as i64,
-                event.timestamp.to_rfc3339(),
-                serde_json::to_string(&event.kind).unwrap_or_default(),
-            ],
-        )?;
-
-        Ok(event)
+        record_event_on(&self.conn, &mut self.event_seq, kind)
     }
 
     /// Get events since a sequence number.
@@ -389,6 +327,170 @@ impl Storage {
 
         Ok(events)
     }
+}
+
+// ---------------------------------------------------------------------------
+// Inner functions — accept &Connection so they work with both
+// Connection (auto-commit) and Transaction (deref to Connection).
+// ---------------------------------------------------------------------------
+
+fn insert_work_item_on(conn: &Connection, item: &WorkItem) -> Result<()> {
+    conn.execute(
+        "INSERT INTO work_items (
+            id, work_type, dedup_key, source, trigger_, params, priority,
+            state, merged_into, parent_id, attempts, max_attempts,
+            created_at, updated_at
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
+        params![
+            item.id.0.to_string(),
+            item.work_type,
+            item.dedup_key,
+            item.provenance.source,
+            item.provenance.trigger,
+            serde_json::to_string(&item.params).unwrap_or_default(),
+            item.priority,
+            item.state.to_string(),
+            item.merged_into.map(|id| id.0.to_string()),
+            item.parent_id.map(|id| id.0.to_string()),
+            item.attempts,
+            item.max_attempts,
+            item.created_at.to_rfc3339(),
+            item.updated_at.to_rfc3339(),
+        ],
+    )?;
+    Ok(())
+}
+
+fn get_state_on(conn: &Connection, id: WorkId) -> Result<State> {
+    let state_str: String = conn
+        .query_row(
+            "SELECT state FROM work_items WHERE id = ?1",
+            params![id.0.to_string()],
+            |row| row.get(0),
+        )
+        .optional()?
+        .ok_or_else(|| Error::NotFound(id.to_string()))?;
+
+    parse_state(&state_str)
+}
+
+fn get_work_item_on(conn: &Connection, id: WorkId) -> Result<WorkItem> {
+    conn.query_row(
+        "SELECT * FROM work_items WHERE id = ?1",
+        params![id.0.to_string()],
+        |row| Ok(row_to_work_item(row)),
+    )?
+    .map_err(|e| Error::Other(format!("failed to parse work item: {e}")))
+}
+
+fn update_state_on(conn: &Connection, id: WorkId, new_state: State) -> Result<State> {
+    let old_state = get_state_on(conn, id)?;
+
+    if !old_state.can_transition_to(new_state) {
+        return Err(Error::InvalidTransition {
+            from: old_state,
+            to: new_state,
+        });
+    }
+
+    let now = Utc::now().to_rfc3339();
+    let completed_at = if new_state.is_terminal() {
+        Some(now.clone())
+    } else {
+        None
+    };
+
+    conn.execute(
+        "UPDATE work_items SET state = ?1, updated_at = ?2, completed_at = COALESCE(?3, completed_at) WHERE id = ?4",
+        params![new_state.to_string(), now, completed_at, id.0.to_string()],
+    )?;
+
+    Ok(old_state)
+}
+
+fn find_active_by_dedup_on(
+    conn: &Connection,
+    work_type: &str,
+    dedup_key: &str,
+) -> Result<Vec<WorkItem>> {
+    let mut stmt = conn.prepare(
+        "SELECT * FROM work_items
+         WHERE work_type = ?1 AND dedup_key = ?2
+         AND state NOT IN ('completed', 'dead', 'merged')
+         ORDER BY created_at ASC",
+    )?;
+
+    let items = stmt
+        .query_map(params![work_type, dedup_key], |row| {
+            Ok(row_to_work_item(row))
+        })?
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+
+    let mut result = Vec::new();
+    for item in items {
+        result.push(item.map_err(|e| Error::Other(format!("parse error: {e}")))?);
+    }
+    Ok(result)
+}
+
+/// Merge a work item into a canonical item, preserving provenance.
+///
+/// Validates the state transition (Created → Merged) before writing,
+/// unlike the previous implementation which bypassed `can_transition_to()`.
+fn merge_work_item_on(conn: &Connection, id: WorkId, canonical_id: WorkId) -> Result<()> {
+    let item = get_work_item_on(conn, id)?;
+
+    // Validate state transition (fixes Issue #2: merge bypassing state validation)
+    let old_state = get_state_on(conn, id)?;
+    if !old_state.can_transition_to(State::Merged) {
+        return Err(Error::InvalidTransition {
+            from: old_state,
+            to: State::Merged,
+        });
+    }
+
+    // Record merged provenance on the canonical item
+    conn.execute(
+        "INSERT INTO merged_provenance (work_id, source, trigger_, created_at)
+         VALUES (?1, ?2, ?3, ?4)",
+        params![
+            canonical_id.0.to_string(),
+            item.provenance.source,
+            item.provenance.trigger,
+            item.created_at.to_rfc3339(),
+        ],
+    )?;
+
+    // Update the merged item
+    let now = Utc::now().to_rfc3339();
+    conn.execute(
+        "UPDATE work_items SET state = ?1, merged_into = ?2, updated_at = ?3, completed_at = ?3 WHERE id = ?4",
+        params![State::Merged.to_string(), canonical_id.0.to_string(), now, id.0.to_string()],
+    )?;
+
+    Ok(())
+}
+
+fn record_event_on(conn: &Connection, event_seq: &mut u64, kind: EventKind) -> Result<Event> {
+    *event_seq += 1;
+    let now = Utc::now();
+
+    let event = Event {
+        seq: *event_seq,
+        timestamp: now,
+        kind: kind.clone(),
+    };
+
+    conn.execute(
+        "INSERT INTO events (seq, timestamp, kind) VALUES (?1, ?2, ?3)",
+        params![
+            event.seq as i64,
+            event.timestamp.to_rfc3339(),
+            serde_json::to_string(&event.kind).unwrap_or_default(),
+        ],
+    )?;
+
+    Ok(event)
 }
 
 // ---------------------------------------------------------------------------

@@ -47,6 +47,10 @@ impl Engine {
     }
 
     /// Submit new work. Performs structural dedup check, then queues.
+    ///
+    /// The entire flow (insert + dedup check + merge-or-queue + events) runs
+    /// within a single SQLite transaction for crash safety and correctness
+    /// under concurrent access.
     pub fn submit(&mut self, new: NewWorkItem) -> Result<SubmitResult> {
         let now = Utc::now();
         let id = WorkId::new();
@@ -68,54 +72,55 @@ impl Engine {
             completed_at: None,
         };
 
-        self.storage.insert_work_item(&item)?;
+        self.storage.with_transaction(|ctx| {
+            ctx.insert_work_item(&item)?;
 
-        self.storage.record_event(EventKind::WorkCreated {
-            id,
-            work_type: new.work_type.clone(),
-            dedup_key: new.dedup_key.clone(),
-            priority: new.priority,
-            source: new.provenance.source.clone(),
-        })?;
+            ctx.record_event(EventKind::WorkCreated {
+                id,
+                work_type: new.work_type.clone(),
+                dedup_key: new.dedup_key.clone(),
+                priority: new.priority,
+                source: new.provenance.source.clone(),
+            })?;
 
-        // Structural dedup check
-        if let Some(ref dedup_key) = new.dedup_key {
-            let candidates = self
-                .storage
-                .find_active_by_dedup(&new.work_type, dedup_key)?;
+            // Structural dedup check — layer 1 (exact key match).
+            // Future layers (embedding similarity, LLM evaluation) can be
+            // added here within the same transaction boundary.
+            if let Some(ref dedup_key) = new.dedup_key {
+                let candidates = ctx.find_active_by_dedup(&new.work_type, dedup_key)?;
 
-            // Find existing (not the one we just inserted)
-            let existing = candidates.iter().find(|c| c.id != id);
+                // Find existing (not the one we just inserted)
+                let existing = candidates.iter().find(|c| c.id != id);
 
-            if let Some(canonical) = existing {
-                let canonical_id = canonical.id;
+                if let Some(canonical) = existing {
+                    let canonical_id = canonical.id;
 
-                self.storage.merge_work_item(id, canonical_id)?;
+                    ctx.merge_work_item(id, canonical_id)?;
 
-                self.storage.record_event(EventKind::WorkMerged {
-                    id,
-                    canonical_id,
-                    reason: format!("structural dedup: {}={}", new.work_type, dedup_key),
-                })?;
+                    ctx.record_event(EventKind::WorkMerged {
+                        id,
+                        canonical_id,
+                        reason: format!("structural dedup: {}={}", new.work_type, dedup_key),
+                    })?;
 
-                return Ok(SubmitResult::Merged {
-                    new_id: id,
-                    canonical_id,
-                });
+                    return Ok(SubmitResult::Merged {
+                        new_id: id,
+                        canonical_id,
+                    });
+                }
             }
-        }
 
-        // No dedup match — queue it
-        self.storage.update_state(id, State::Queued)?;
+            // No dedup match — queue it
+            ctx.update_state(id, State::Queued)?;
 
-        self.storage.record_event(EventKind::WorkQueued {
-            id,
-            priority: new.priority,
-        })?;
+            ctx.record_event(EventKind::WorkQueued {
+                id,
+                priority: new.priority,
+            })?;
 
-        // Re-fetch to get updated state
-        let item = self.storage.get_work_item(id)?;
-        Ok(SubmitResult::Created(item))
+            let item = ctx.get_work_item(id)?;
+            Ok(SubmitResult::Created(item))
+        })
     }
 
     /// Get a work item by ID.

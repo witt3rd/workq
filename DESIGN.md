@@ -114,6 +114,8 @@ When work is merged, both provenances are preserved via `merged_provenance`. You
 
 When creating work with a `dedup_key`, the engine checks: is there already a work item with the same `(work_type, dedup_key)` that is queued, claimed, or running? If so, **merge** — the new item links to the existing one, both provenances are recorded, only one execution happens.
 
+The entire submit flow (insert + dedup check + merge-or-queue + event recording) runs within a single SQLite transaction. This guarantees crash safety (no orphaned `Created` items) and correctness under concurrent access (two submits with the same dedup key cannot both slip through). The transactional boundary (`TxContext`) is designed so additional dedup strategies can be plugged in within the same atomic operation.
+
 The dedup window covers all non-terminal states. A configurable time-based window for recently-completed work is a planned extension ("don't re-check a project within 1 hour of the last check").
 
 ### Dedup Verdicts (Future)
@@ -216,21 +218,23 @@ External work sources (Telegram, CLI, other apps) submit work via IPC (Unix doma
 - Core types: WorkItem, State, Provenance, Outcome, LogEntry, NewWorkItem builder
 - State machine with enforced valid transitions
 - Structural dedup on `(work_type, dedup_key)`
-- Merge with provenance preservation
+- Transactional submit (atomic insert + dedup check + state transition + events)
+- Merge with provenance preservation and state transition validation
 - Priority-ordered claiming
 - Retry with configurable max attempts
 - Poison pill detection (fail → dead after exhausted retries)
 - Work-scoped logging
 - Structured event stream with monotonic sequencing
 - SQLite storage with WAL mode and partial indexes
+- Transaction support (`TxContext` + `with_transaction`) for multi-step atomic operations
 - In-memory mode for tests
-- Integration test suite (12 tests)
+- Integration test suite (15 tests)
 
 ### Not Yet Implemented
 - Worker trait and worker pool
 - Capacity management (global + per-type limits)
 - Circuit breaking
-- Semantic dedup hook
+- Semantic dedup hook (transactional infrastructure in place via `TxContext`)
 - Dedup time window (recently-completed)
 - Supersede / Defer dedup verdicts
 - Child work spawning and continuations
@@ -243,7 +247,7 @@ External work sources (Telegram, CLI, other apps) submit work via IPC (Unix doma
 ## Open Design Questions
 
 - **IPC protocol**: JSON lines vs protobuf over Unix domain socket
-- **Semantic dedup hook**: trait-based callback vs channel-based async
+- **Semantic dedup hook**: `TxContext` provides the transactional execution boundary — remaining question is the host-facing API shape (trait-based callback vs channel-based async)
 - **Priority formula**: engine-provided age boost, or fully host-controlled?
 - **Configuration**: TOML for work type definitions (capacity, retry policy, priority)
 - **Child work**: how to express continuations that run when all children complete
