@@ -54,7 +54,7 @@ impl TxContext<'_> {
 
 impl Storage {
     /// Open or create a database at the given path.
-    pub fn open(path: &str) -> Result<Self> {
+    pub fn open(path: impl AsRef<std::path::Path>) -> Result<Self> {
         let conn = Connection::open(path)?;
         let mut storage = Self { conn, event_seq: 0 };
         storage.init()?;

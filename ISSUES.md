@@ -197,15 +197,11 @@ This uses `SELECT *` combined with hardcoded column indexes (0, 5, 7, 15, 16, 17
 
 Removed the unused `tempfile` dev-dependency from `Cargo.toml`. Tests use `Engine::in_memory()` exclusively and never reference `tempfile`.
 
-### 12. `Engine::open()` should accept `impl AsRef<Path>`, not `&str`
+### ~~12. `Engine::open()` should accept `impl AsRef<Path>`, not `&str`~~ ✓ FIXED
 
-**File:** `src/engine.rs:42`
+**Fixed in:** `witt3rd/open-accept-path` branch
 
-```rust
-pub fn open(path: &str) -> Result<Self> {
-```
-
-Idiomatic Rust file-opening APIs accept `impl AsRef<Path>` to work with `&str`, `String`, `PathBuf`, and `&Path`. This is a minor ergonomics point.
+Both `Engine::open()` and `Storage::open()` now accept `impl AsRef<std::path::Path>` instead of `&str`, matching idiomatic Rust file-opening APIs. Callers can pass `&str`, `String`, `PathBuf`, or `&Path` without conversion.
 
 ### 13. `NewWorkItem` has all `pub` fields -- builder pattern partially undermined
 

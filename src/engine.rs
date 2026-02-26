@@ -39,7 +39,7 @@ impl Engine {
     }
 
     /// Create an engine backed by a file.
-    pub fn open(path: &str) -> Result<Self> {
+    pub fn open(path: impl AsRef<std::path::Path>) -> Result<Self> {
         Ok(Self {
             storage: Storage::open(path)?,
             default_max_attempts: 3,
