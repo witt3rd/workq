@@ -59,5 +59,4 @@ Terminal: Completed, Dead, Merged
 - Logs are scoped to work items — no global log stream, no console streaming
 - Tests use `Engine::in_memory()` — no temp files, no cleanup
 - Pre-commit hook runs fmt + clippy + tests; don't bypass it
-- `tempfile` dev-dependency is unused (tests use `Engine::in_memory()`)
 - `Storage` and its methods are `pub` but should be `pub(crate)` per conventions — see `ISSUES.md`

@@ -191,16 +191,11 @@ This uses `SELECT *` combined with hardcoded column indexes (0, 5, 7, 15, 16, 17
 
 ## Minor (4)
 
-### 11. `tempfile` dev-dependency is unused
+### ~~11. `tempfile` dev-dependency is unused~~ ✓ FIXED
 
-**File:** `Cargo.toml:17`
+**Fixed in:** `witt3rd/rm-tempfile-dep` branch
 
-```toml
-[dev-dependencies]
-tempfile = "3"
-```
-
-The tests use `Engine::in_memory()` exclusively. The `tempfile` crate is not referenced anywhere in the test files. It should be removed to keep dependencies minimal, or a test using file-backed storage should be added (which would also improve coverage of `Engine::open()`).
+Removed the unused `tempfile` dev-dependency from `Cargo.toml`. Tests use `Engine::in_memory()` exclusively and never reference `tempfile`.
 
 ### 12. `Engine::open()` should accept `impl AsRef<Path>`, not `&str`
 
