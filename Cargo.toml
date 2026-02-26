@@ -1,0 +1,21 @@
+[package]
+name = "workq"
+version = "0.1.0"
+edition = "2024"
+description = "A work-tracking engine with dedup, scheduling, and observability"
+license = "MIT"
+
+[dependencies]
+chrono = { version = "0.4", features = ["serde"] }
+rusqlite = { version = "0.35", features = ["bundled"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+uuid = { version = "1", features = ["v4", "serde"] }
+
+[dev-dependencies]
+tempfile = "3"
+
+[[bin]]
+name = "workq"
+path = "src/bin/workq.rs"
