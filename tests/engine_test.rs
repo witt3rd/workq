@@ -294,6 +294,89 @@ fn events_are_recorded_with_monotonic_seq() {
 }
 
 // ---------------------------------------------------------------------------
+// Transactional submit
+// ---------------------------------------------------------------------------
+
+#[test]
+fn no_orphaned_created_items() {
+    let mut engine = test_engine();
+
+    for i in 0..5 {
+        engine
+            .submit(NewWorkItem::new("batch", "test").dedup_key(format!("k{i}")))
+            .unwrap();
+    }
+
+    // All items should be Queued, none stuck in Created
+    let created = engine.list_by_state(State::Created).unwrap();
+    assert!(
+        created.is_empty(),
+        "found {} orphaned Created items",
+        created.len()
+    );
+
+    let queued = engine.list_by_state(State::Queued).unwrap();
+    assert_eq!(queued.len(), 5);
+}
+
+#[test]
+fn submit_dedup_events_are_atomic() {
+    let mut engine = test_engine();
+
+    // First submit
+    engine
+        .submit(NewWorkItem::new("dedup-atomic", "test").dedup_key("k"))
+        .unwrap();
+
+    // Second submit (duplicate)
+    engine
+        .submit(NewWorkItem::new("dedup-atomic", "test2").dedup_key("k"))
+        .unwrap();
+
+    let events = engine.get_events_since(0).unwrap();
+
+    // First submit: WorkCreated + WorkQueued
+    // Second submit: WorkCreated + WorkMerged
+    assert_eq!(events.len(), 4);
+
+    // Sequence numbers are consecutive with no gaps
+    for window in events.windows(2) {
+        assert_eq!(window[1].seq, window[0].seq + 1);
+    }
+}
+
+#[test]
+fn merge_validates_state_transition() {
+    let mut engine = test_engine();
+
+    let first = match engine
+        .submit(NewWorkItem::new("check", "test").dedup_key("k1"))
+        .unwrap()
+    {
+        SubmitResult::Created(item) => item,
+        _ => panic!("expected Created"),
+    };
+
+    // Second submit with same dedup key — should merge
+    let result = engine
+        .submit(NewWorkItem::new("check", "test2").dedup_key("k1"))
+        .unwrap();
+
+    match result {
+        SubmitResult::Merged {
+            new_id,
+            canonical_id,
+        } => {
+            assert_eq!(canonical_id, first.id);
+            let merged = engine.get(new_id).unwrap();
+            assert_eq!(merged.state, State::Merged);
+            assert_eq!(merged.merged_into, Some(canonical_id));
+        }
+        _ => panic!("expected Merged"),
+    }
+}
+
+// ---------------------------------------------------------------------------
 // State transition validation
 // ---------------------------------------------------------------------------
 

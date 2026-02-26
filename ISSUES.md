@@ -4,46 +4,50 @@ Overall assessment: **strong initial implementation**. Clean architecture, corre
 
 ---
 
+## Parallelization Guide
+
+The remaining issues fall into independent groups that can be worked on simultaneously without merge conflicts.
+
+**Group A** — Standalone, zero conflict with anything (model.rs, Cargo.toml, engine.rs signature):
+- #11, #12, #13 — all touch different files with no overlap
+
+**Group B** — Storage parsing/safety (localized to distinct functions in storage.rs):
+- #3 (unwrap in get_logs, get_events_since)
+- #8 (outcome_ms overflow in set_outcome)
+- #10 (positional indexes in row_to_work_item + queries)
+
+These touch different functions but share storage.rs, so merge conflicts are possible but minor.
+
+**Group C** — Storage architecture (broader structural changes to storage.rs):
+- #7 (event_seq → AUTOINCREMENT) — changes Storage struct, record_event_on, TxContext
+- #9 (pub → pub(crate)) — sweeping visibility change, do last or on its own branch
+
+**Group D** — Engine operations (engine.rs + new storage methods):
+- #4 (completed_at rename) — schema + update_state_on
+- #5 (claim LIMIT 1) — new storage method + engine change
+- #6 (remaining transactions) — wraps fail/complete/start/claim with with_transaction
+
+**Dependencies:**
+- #7 should land before #6 (event_seq fix affects TxContext, which #6 relies on heavily)
+- #9 should land last (touches every method signature, high conflict surface)
+- Groups A, B, and D can all run in parallel
+- Within Group D, #5 and #6 both touch claim() — do #5 first, then #6
+
+---
+
 ## Critical (3)
 
-### 1. Submit is not transactional
+### ~~1. Submit is not transactional~~ ✓ FIXED
 
-**File:** `src/engine.rs:50-118`
+**Fixed in:** `witt3rd/fix-submit-txn` branch
 
-The current flow is: insert the item in `Created` state, then check for dedup matches, then either merge or transition to `Queued`. The problem is that two concurrent calls to `submit()` with the same dedup key can both insert, both see only their own item (the other hasn't been committed yet), and both proceed to `Queued`. This defeats the work-once guarantee.
+`Engine::submit()` now runs the entire flow (insert + dedup check + merge-or-queue + event recording) within a single SQLite transaction via `Storage::with_transaction()` and a `TxContext` helper. Crash safety and concurrent-access correctness are both addressed. The `TxContext` pattern is reusable for wrapping other multi-step engine operations (see Issue #6).
 
-Currently, `Engine` takes `&mut self`, which prevents this at the Rust level for single-threaded use. However, the design spec envisions this as a daemon with IPC, and the `Storage` module exposes `pub` constructors -- so nothing prevents a future consumer from wrapping `Engine` in a `Mutex` or having multiple `Storage` instances against the same database.
+### ~~2. `merge_work_item()` bypasses `State::can_transition_to()` validation~~ ✓ FIXED
 
-**Recommendation:** Wrap the insert + dedup check + state transition in a single SQLite transaction. This is also important for crash safety -- if the process dies between the insert and the state update, you have an orphaned `Created` item that will never be processed.
+**Fixed in:** `witt3rd/fix-submit-txn` branch
 
-```rust
-// In storage.rs, add a transactional submit:
-pub fn submit_with_dedup(&mut self, item: &WorkItem, dedup_key: Option<&str>) -> Result<Option<WorkId>> {
-    let tx = self.conn.transaction()?;
-    // INSERT the item
-    // If dedup_key, SELECT matching active items (excluding this one)
-    // If match found, UPDATE to merged; return canonical_id
-    // Otherwise, UPDATE to queued
-    tx.commit()?;
-    // ...
-}
-```
-
-### 2. `merge_work_item()` bypasses `State::can_transition_to()` validation
-
-**File:** `src/storage.rs:237-261`
-
-```rust
-// Line 255-258: raw SQL UPDATE, no validation
-self.conn.execute(
-    "UPDATE work_items SET state = 'merged', merged_into = ?1, ...",
-    ...
-)?;
-```
-
-This directly writes `state = 'merged'` without calling `update_state()`, which means the `can_transition_to()` check is skipped. If `merge_work_item` is ever called on an item that is not in `Created` state, the state machine invariant is broken silently. The CLAUDE.md convention says "Storage enforces valid state transitions via `State::can_transition_to()`" -- this method violates that.
-
-**Recommendation:** Call `self.update_state(id, State::Merged)?;` and then separately update `merged_into` and `completed_at`, or at minimum add an explicit state check inside `merge_work_item`.
+`merge_work_item_on()` now validates `can_transition_to(State::Merged)` before writing and uses `State::Merged.to_string()` instead of a hardcoded string literal.
 
 ### 3. `unwrap()` calls in library code parsing paths
 
@@ -108,7 +112,9 @@ pub fn claim_next(&self) -> Result<Option<WorkItem>> {
 
 **File:** `src/engine.rs`
 
-The `complete()`, `fail()`, `start()`, and `claim()` methods each perform multiple storage operations without a transaction. For example, `fail()` (lines 178-213) does:
+**Partially addressed:** `submit()` is now transactional (see Issue #1 fix). The `TxContext` + `with_transaction` infrastructure is in place and reusable.
+
+**Remaining:** `complete()`, `fail()`, `start()`, and `claim()` still perform multiple storage operations without a transaction. For example, `fail()` does:
 
 1. `get_work_item(id)`
 2. `update_state(id, State::Failed)`
@@ -118,7 +124,7 @@ The `complete()`, `fail()`, `start()`, and `claim()` methods each perform multip
 
 If the process crashes between steps 2 and 4, the item is stuck in `Failed` with no path forward -- it is not `Dead` and not `Queued`. The `Failed -> Failed` transition is not in `can_transition_to()`, so manual intervention is required.
 
-**Recommendation:** Expose `Connection::transaction()` through `Storage` and wrap multi-step engine operations in transactions. This is especially important for `fail()` and `submit()`.
+**Recommendation:** Wrap these methods using the existing `storage.with_transaction()` pattern. This is especially important for `fail()`.
 
 ### 7. `event_seq` in `Storage` can diverge from the database
 
