@@ -211,6 +211,22 @@ impl Storage {
         Ok(result)
     }
 
+    /// Fetch the next queued work item (highest priority, oldest first).
+    /// Returns None if no items are queued. Uses LIMIT 1 to avoid loading the entire queue.
+    pub fn claim_next(&self) -> Result<Option<WorkItem>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT * FROM work_items WHERE state = 'queued' ORDER BY priority DESC, created_at ASC LIMIT 1",
+        )?;
+        let mut rows = stmt.query_map([], |row| Ok(row_to_work_item(row)))?;
+        match rows.next() {
+            Some(Ok(item)) => Ok(Some(
+                item.map_err(|e| Error::Other(format!("parse error: {e}")))?,
+            )),
+            Some(Err(e)) => Err(e.into()),
+            None => Ok(None),
+        }
+    }
+
     /// Set merged_into and record the merged provenance.
     pub fn merge_work_item(&mut self, id: WorkId, canonical_id: WorkId) -> Result<()> {
         merge_work_item_on(&self.conn, id, canonical_id)

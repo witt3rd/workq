@@ -75,31 +75,11 @@ let completed_at = if new_state.is_terminal() {
 
 **Recommendation:** Either rename to `ended_at` / `resolved_at`, or only set it for `State::Completed`. The spec lifecycle diagram treats these as distinct terminal states with different semantics.
 
-### 5. `claim()` loads all queued items to get the first one
+### ~~5. `claim()` loads all queued items to get the first one~~ ✓ FIXED
 
-**File:** `src/engine.rs:132-146`
+**Fixed in:** `witt3rd/claim-limit-one` branch
 
-```rust
-pub fn claim(&mut self, worker_id: &str) -> Result<Option<WorkItem>> {
-    let queued = self.storage.list_by_state(State::Queued)?;
-    let Some(item) = queued.into_iter().next() else {
-        return Ok(None);
-    };
-    // ...
-}
-```
-
-`list_by_state(State::Queued)` fetches and deserializes every queued item, then takes only the first. With a large queue, this is wasteful.
-
-**Recommendation:** Add a `claim_next()` method to `Storage` that uses `LIMIT 1` in the SQL query. The `idx_queued` partial index already exists for exactly this query.
-
-```rust
-// In storage.rs:
-pub fn claim_next(&self) -> Result<Option<WorkItem>> {
-    // SELECT * FROM work_items WHERE state = 'queued'
-    // ORDER BY priority DESC, created_at ASC LIMIT 1
-}
-```
+Added a `claim_next()` method to `Storage` that uses `SELECT ... WHERE state = 'queued' ORDER BY priority DESC, created_at ASC LIMIT 1`, hitting the existing `idx_queued` partial index. `Engine::claim()` now calls `claim_next()` instead of `list_by_state(State::Queued)`, avoiding loading and deserializing the entire queue.
 
 ### 6. No transactions around multi-step operations in `engine.rs`
 

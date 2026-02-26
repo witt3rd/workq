@@ -135,8 +135,7 @@ impl Engine {
 
     /// Claim the next queued work item for a worker. Returns None if queue is empty.
     pub fn claim(&mut self, worker_id: &str) -> Result<Option<WorkItem>> {
-        let queued = self.storage.list_by_state(State::Queued)?;
-        let Some(item) = queued.into_iter().next() else {
+        let Some(item) = self.storage.claim_next()? else {
             return Ok(None);
         };
 
