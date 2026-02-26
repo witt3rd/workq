@@ -13,7 +13,6 @@ use crate::model::*;
 /// Storage backend. Owns the SQLite connection.
 pub struct Storage {
     conn: Connection,
-    event_seq: u64,
 }
 
 /// Handle for performing storage operations within a transaction.
@@ -23,7 +22,6 @@ pub struct Storage {
 /// all operations commit together or none do.
 pub(crate) struct TxContext<'a> {
     tx: &'a Connection,
-    event_seq: &'a mut u64,
 }
 
 impl TxContext<'_> {
@@ -48,7 +46,7 @@ impl TxContext<'_> {
     }
 
     pub fn record_event(&mut self, kind: EventKind) -> Result<Event> {
-        record_event_on(self.tx, self.event_seq, kind)
+        record_event_on(self.tx, kind)
     }
 }
 
@@ -56,7 +54,7 @@ impl Storage {
     /// Open or create a database at the given path.
     pub fn open(path: impl AsRef<std::path::Path>) -> Result<Self> {
         let conn = Connection::open(path)?;
-        let mut storage = Self { conn, event_seq: 0 };
+        let mut storage = Self { conn };
         storage.init()?;
         Ok(storage)
     }
@@ -64,7 +62,7 @@ impl Storage {
     /// Create an in-memory database (for testing).
     pub fn in_memory() -> Result<Self> {
         let conn = Connection::open_in_memory()?;
-        let mut storage = Self { conn, event_seq: 0 };
+        let mut storage = Self { conn };
         storage.init()?;
         Ok(storage)
     }
@@ -134,14 +132,6 @@ impl Storage {
             ",
         )?;
 
-        // Initialize event sequence from DB
-        let max_seq: Option<u64> = self
-            .conn
-            .query_row("SELECT MAX(seq) FROM events", [], |row| row.get(0))
-            .optional()?
-            .flatten();
-        self.event_seq = max_seq.unwrap_or(0);
-
         Ok(())
     }
 
@@ -152,21 +142,14 @@ impl Storage {
     /// Execute a closure within a SQLite transaction.
     ///
     /// The transaction commits if the closure returns Ok, rolls back on Err.
-    /// The event sequence counter is snapshotted before the transaction and
-    /// only updated on successful commit.
     pub(crate) fn with_transaction<F, T>(&mut self, f: F) -> Result<T>
     where
         F: FnOnce(&mut TxContext) -> Result<T>,
     {
         let tx = self.conn.transaction()?;
-        let mut local_seq = self.event_seq;
-        let mut ctx = TxContext {
-            tx: &tx,
-            event_seq: &mut local_seq,
-        };
+        let mut ctx = TxContext { tx: &tx };
         let result = f(&mut ctx)?;
         tx.commit()?;
-        self.event_seq = local_seq;
         Ok(result)
     }
 
@@ -304,7 +287,7 @@ impl Storage {
 
     /// Record an event and return it with its sequence number.
     pub fn record_event(&mut self, kind: EventKind) -> Result<Event> {
-        record_event_on(&self.conn, &mut self.event_seq, kind)
+        record_event_on(&self.conn, kind)
     }
 
     /// Get events since a sequence number.
@@ -474,26 +457,24 @@ fn merge_work_item_on(conn: &Connection, id: WorkId, canonical_id: WorkId) -> Re
     Ok(())
 }
 
-fn record_event_on(conn: &Connection, event_seq: &mut u64, kind: EventKind) -> Result<Event> {
-    *event_seq += 1;
+fn record_event_on(conn: &Connection, kind: EventKind) -> Result<Event> {
     let now = Utc::now();
 
-    let event = Event {
-        seq: *event_seq,
-        timestamp: now,
-        kind: kind.clone(),
-    };
-
     conn.execute(
-        "INSERT INTO events (seq, timestamp, kind) VALUES (?1, ?2, ?3)",
+        "INSERT INTO events (timestamp, kind) VALUES (?1, ?2)",
         params![
-            event.seq as i64,
-            event.timestamp.to_rfc3339(),
-            serde_json::to_string(&event.kind).unwrap_or_default(),
+            now.to_rfc3339(),
+            serde_json::to_string(&kind).unwrap_or_default(),
         ],
     )?;
 
-    Ok(event)
+    let seq = conn.last_insert_rowid();
+
+    Ok(Event {
+        seq: seq as u64,
+        timestamp: now,
+        kind,
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -576,8 +557,8 @@ mod tests {
         storage
             .conn
             .execute(
-                "INSERT INTO events (seq, timestamp, kind) VALUES (?1, ?2, ?3)",
-                params![1i64, Utc::now().to_rfc3339(), "this is not valid json {{{"],
+                "INSERT INTO events (timestamp, kind) VALUES (?1, ?2)",
+                params![Utc::now().to_rfc3339(), "this is not valid json {{{"],
             )
             .unwrap();
 
@@ -599,8 +580,8 @@ mod tests {
         storage
             .conn
             .execute(
-                "INSERT INTO events (seq, timestamp, kind) VALUES (?1, ?2, ?3)",
-                params![1i64, Utc::now().to_rfc3339(), future_event],
+                "INSERT INTO events (timestamp, kind) VALUES (?1, ?2)",
+                params![Utc::now().to_rfc3339(), future_event],
             )
             .unwrap();
 
