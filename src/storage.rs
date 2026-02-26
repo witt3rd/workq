@@ -276,7 +276,15 @@ impl Storage {
         let entries = stmt
             .query_map(params![work_id.0.to_string()], |row| {
                 Ok(LogEntry {
-                    work_id: WorkId(row.get::<_, String>(0)?.parse().unwrap()),
+                    work_id: WorkId(row.get::<_, String>(0)?.parse().map_err(
+                        |e: uuid::Error| {
+                            rusqlite::Error::FromSqlConversionFailure(
+                                0,
+                                rusqlite::types::Type::Text,
+                                Box::new(e),
+                            )
+                        },
+                    )?),
                     timestamp: row
                         .get::<_, String>(1)?
                         .parse()
@@ -314,13 +322,8 @@ impl Storage {
                         .get::<_, String>(1)?
                         .parse()
                         .unwrap_or_else(|_| Utc::now()),
-                    kind: serde_json::from_str(&kind_str).unwrap_or(EventKind::WorkCreated {
-                        id: WorkId::new(),
-                        work_type: "?".into(),
-                        dedup_key: None,
-                        priority: 0,
-                        source: "?".into(),
-                    }),
+                    kind: serde_json::from_str(&kind_str)
+                        .unwrap_or(EventKind::Unknown { raw: kind_str }),
                 })
             })?
             .collect::<std::result::Result<Vec<_>, _>>()?;
@@ -559,5 +562,55 @@ fn parse_log_level(s: &str) -> LogLevel {
         "WARN" => LogLevel::Warn,
         "ERROR" => LogLevel::Error,
         _ => LogLevel::Info,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn malformed_event_json_returns_unknown_variant() {
+        let storage = Storage::in_memory().unwrap();
+
+        storage
+            .conn
+            .execute(
+                "INSERT INTO events (seq, timestamp, kind) VALUES (?1, ?2, ?3)",
+                params![1i64, Utc::now().to_rfc3339(), "this is not valid json {{{"],
+            )
+            .unwrap();
+
+        let events = storage.get_events_since(0).unwrap();
+        assert_eq!(events.len(), 1);
+        match &events[0].kind {
+            EventKind::Unknown { raw } => {
+                assert_eq!(raw, "this is not valid json {{{");
+            }
+            other => panic!("expected Unknown, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn unrecognized_event_type_returns_unknown_variant() {
+        let storage = Storage::in_memory().unwrap();
+
+        let future_event = r#"{"type":"quantum_entangled","qubit_id":"q42"}"#;
+        storage
+            .conn
+            .execute(
+                "INSERT INTO events (seq, timestamp, kind) VALUES (?1, ?2, ?3)",
+                params![1i64, Utc::now().to_rfc3339(), future_event],
+            )
+            .unwrap();
+
+        let events = storage.get_events_since(0).unwrap();
+        assert_eq!(events.len(), 1);
+        match &events[0].kind {
+            EventKind::Unknown { raw } => {
+                assert_eq!(raw, future_event);
+            }
+            other => panic!("expected Unknown, got {:?}", other),
+        }
     }
 }
