@@ -11,7 +11,7 @@ use crate::event::{Event, EventKind};
 use crate::model::*;
 
 /// Storage backend. Owns the SQLite connection.
-pub struct Storage {
+pub(crate) struct Storage {
     conn: Connection,
 }
 
@@ -25,46 +25,50 @@ pub(crate) struct TxContext<'a> {
 }
 
 impl TxContext<'_> {
-    pub fn insert_work_item(&self, item: &WorkItem) -> Result<()> {
+    pub(crate) fn insert_work_item(&self, item: &WorkItem) -> Result<()> {
         insert_work_item_on(self.tx, item)
     }
 
-    pub fn get_work_item(&self, id: WorkId) -> Result<WorkItem> {
+    pub(crate) fn get_work_item(&self, id: WorkId) -> Result<WorkItem> {
         get_work_item_on(self.tx, id)
     }
 
-    pub fn update_state(&self, id: WorkId, new_state: State) -> Result<State> {
+    pub(crate) fn update_state(&self, id: WorkId, new_state: State) -> Result<State> {
         update_state_on(self.tx, id, new_state)
     }
 
-    pub fn find_active_by_dedup(&self, work_type: &str, dedup_key: &str) -> Result<Vec<WorkItem>> {
+    pub(crate) fn find_active_by_dedup(
+        &self,
+        work_type: &str,
+        dedup_key: &str,
+    ) -> Result<Vec<WorkItem>> {
         find_active_by_dedup_on(self.tx, work_type, dedup_key)
     }
 
-    pub fn merge_work_item(&self, id: WorkId, canonical_id: WorkId) -> Result<()> {
+    pub(crate) fn merge_work_item(&self, id: WorkId, canonical_id: WorkId) -> Result<()> {
         merge_work_item_on(self.tx, id, canonical_id)
     }
 
-    pub fn record_event(&mut self, kind: EventKind) -> Result<Event> {
+    pub(crate) fn record_event(&mut self, kind: EventKind) -> Result<Event> {
         record_event_on(self.tx, kind)
     }
 
-    pub fn claim_next(&self) -> Result<Option<WorkItem>> {
+    pub(crate) fn claim_next(&self) -> Result<Option<WorkItem>> {
         claim_next_on(self.tx)
     }
 
-    pub fn increment_attempts(&self, id: WorkId) -> Result<u32> {
+    pub(crate) fn increment_attempts(&self, id: WorkId) -> Result<u32> {
         increment_attempts_on(self.tx, id)
     }
 
-    pub fn set_outcome(&self, id: WorkId, outcome: &Outcome) -> Result<()> {
+    pub(crate) fn set_outcome(&self, id: WorkId, outcome: &Outcome) -> Result<()> {
         set_outcome_on(self.tx, id, outcome)
     }
 }
 
 impl Storage {
     /// Open or create a database at the given path.
-    pub fn open(path: impl AsRef<std::path::Path>) -> Result<Self> {
+    pub(crate) fn open(path: impl AsRef<std::path::Path>) -> Result<Self> {
         let conn = Connection::open(path)?;
         let mut storage = Self { conn };
         storage.init()?;
@@ -72,7 +76,7 @@ impl Storage {
     }
 
     /// Create an in-memory database (for testing).
-    pub fn in_memory() -> Result<Self> {
+    pub(crate) fn in_memory() -> Result<Self> {
         let conn = Connection::open_in_memory()?;
         let mut storage = Self { conn };
         storage.init()?;
@@ -169,28 +173,13 @@ impl Storage {
     // Work Items
     // -----------------------------------------------------------------------
 
-    /// Insert a new work item.
-    pub fn insert_work_item(&mut self, item: &WorkItem) -> Result<()> {
-        insert_work_item_on(&self.conn, item)
-    }
-
-    /// Update a work item's state. Returns the previous state.
-    pub fn update_state(&mut self, id: WorkId, new_state: State) -> Result<State> {
-        update_state_on(&self.conn, id, new_state)
-    }
-
     /// Get a work item by ID.
-    pub fn get_work_item(&self, id: WorkId) -> Result<WorkItem> {
+    pub(crate) fn get_work_item(&self, id: WorkId) -> Result<WorkItem> {
         get_work_item_on(&self.conn, id)
     }
 
-    /// Find active (non-terminal) work items matching a dedup key.
-    pub fn find_active_by_dedup(&self, work_type: &str, dedup_key: &str) -> Result<Vec<WorkItem>> {
-        find_active_by_dedup_on(&self.conn, work_type, dedup_key)
-    }
-
     /// List work items by state.
-    pub fn list_by_state(&self, state: State) -> Result<Vec<WorkItem>> {
+    pub(crate) fn list_by_state(&self, state: State) -> Result<Vec<WorkItem>> {
         let mut stmt = self.conn.prepare(
             "SELECT * FROM work_items WHERE state = ?1 ORDER BY priority DESC, created_at ASC",
         )?;
@@ -206,33 +195,12 @@ impl Storage {
         Ok(result)
     }
 
-    /// Fetch the next queued work item (highest priority, oldest first).
-    /// Returns None if no items are queued. Uses LIMIT 1 to avoid loading the entire queue.
-    pub fn claim_next(&self) -> Result<Option<WorkItem>> {
-        claim_next_on(&self.conn)
-    }
-
-    /// Set merged_into and record the merged provenance.
-    pub fn merge_work_item(&mut self, id: WorkId, canonical_id: WorkId) -> Result<()> {
-        merge_work_item_on(&self.conn, id, canonical_id)
-    }
-
-    /// Increment attempt count.
-    pub fn increment_attempts(&mut self, id: WorkId) -> Result<u32> {
-        increment_attempts_on(&self.conn, id)
-    }
-
-    /// Store an outcome on a work item.
-    pub fn set_outcome(&mut self, id: WorkId, outcome: &Outcome) -> Result<()> {
-        set_outcome_on(&self.conn, id, outcome)
-    }
-
     // -----------------------------------------------------------------------
     // Logs
     // -----------------------------------------------------------------------
 
     /// Append a log entry for a work item.
-    pub fn append_log(&mut self, entry: &LogEntry) -> Result<()> {
+    pub(crate) fn append_log(&mut self, entry: &LogEntry) -> Result<()> {
         self.conn.execute(
             "INSERT INTO logs (work_id, timestamp, level, message) VALUES (?1, ?2, ?3, ?4)",
             params![
@@ -246,7 +214,7 @@ impl Storage {
     }
 
     /// Get logs for a work item, ordered by timestamp.
-    pub fn get_logs(&self, work_id: WorkId) -> Result<Vec<LogEntry>> {
+    pub(crate) fn get_logs(&self, work_id: WorkId) -> Result<Vec<LogEntry>> {
         let mut stmt = self.conn.prepare(
             "SELECT work_id, timestamp, level, message FROM logs WHERE work_id = ?1 ORDER BY timestamp ASC",
         )?;
@@ -280,13 +248,8 @@ impl Storage {
     // Events
     // -----------------------------------------------------------------------
 
-    /// Record an event and return it with its sequence number.
-    pub fn record_event(&mut self, kind: EventKind) -> Result<Event> {
-        record_event_on(&self.conn, kind)
-    }
-
     /// Get events since a sequence number.
-    pub fn get_events_since(&self, since_seq: u64) -> Result<Vec<Event>> {
+    pub(crate) fn get_events_since(&self, since_seq: u64) -> Result<Vec<Event>> {
         let mut stmt = self
             .conn
             .prepare("SELECT seq, timestamp, kind FROM events WHERE seq > ?1 ORDER BY seq ASC")?;
