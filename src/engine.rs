@@ -69,7 +69,7 @@ impl Engine {
             max_attempts: new.max_attempts,
             created_at: now,
             updated_at: now,
-            completed_at: None,
+            resolved_at: None,
         };
 
         self.storage.with_transaction(|ctx| {

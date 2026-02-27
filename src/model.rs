@@ -52,7 +52,7 @@ pub struct WorkItem {
 
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
-    pub completed_at: Option<DateTime<Utc>>,
+    pub resolved_at: Option<DateTime<Utc>>,
 }
 
 /// Newtype for work item IDs.

@@ -78,7 +78,7 @@ fn full_lifecycle_submit_claim_start_complete() {
 
     let completed = engine.get(id).unwrap();
     assert_eq!(completed.state, State::Completed);
-    assert!(completed.completed_at.is_some());
+    assert!(completed.resolved_at.is_some());
 }
 
 #[test]
