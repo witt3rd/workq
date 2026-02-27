@@ -6,12 +6,31 @@ description = "Animus v2 engine — Postgres-backed data layer for AI persistenc
 license = "MIT"
 
 [dependencies]
+# Config + Secrets
+dotenvy = "0.15"
+secrecy = { version = "0.10", features = ["serde"] }
+
+# Core
 chrono = { version = "0.4", features = ["serde"] }
-rusqlite = { version = "0.35", features = ["bundled"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+sqlx = { version = "0.8", features = ["runtime-tokio", "postgres", "uuid", "chrono", "json"] }
 thiserror = "2"
+tokio = { version = "1", features = ["full"] }
 uuid = { version = "1", features = ["v4", "serde"] }
+
+# LLM + Embeddings (Rig)
+rig-core = "0.31"
+rig-postgres = "0.1"
+
+# OpenTelemetry
+opentelemetry = "0.31"
+opentelemetry_sdk = { version = "0.31", features = ["rt-tokio"] }
+opentelemetry-otlp = { version = "0.31", features = ["tonic"] }
+opentelemetry-semantic-conventions = "0.31"
+tracing = "0.1"
+tracing-opentelemetry = "0.32"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 [[bin]]
 name = "animus"
