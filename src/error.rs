@@ -1,4 +1,4 @@
-//! Error types for workq.
+//! Error types for animus-rs.
 
 use thiserror::Error;
 
