@@ -2,7 +2,7 @@
 name = "animus-rs"
 version = "0.1.0"
 edition = "2024"
-description = "Animus v2 engine — Postgres-backed data layer for AI persistence"
+description = "AI persistence engine built on Postgres"
 license = "MIT"
 
 [dependencies]

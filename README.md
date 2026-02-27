@@ -1,10 +1,10 @@
 # animus-rs
 
-Postgres-backed data layer for the Animus v2 AI persistence engine.
+AI persistence engine built on Postgres.
 
 ## What This Is
 
-animus-rs provides the foundational data layer for Animus v2:
+animus-rs is the full Animus system — data plane, control plane, LLM abstraction, and observability. Milestone 1 implements the data plane foundation:
 
 - **Work queues** via [pgmq](https://github.com/tembo-io/pgmq) — submit, dedup, queue, claim, execute, complete
 - **Semantic memory** via [pgvector](https://github.com/pgvector/pgvector) — embedding storage, vector similarity search, hybrid BM25+vector
@@ -15,7 +15,7 @@ All backed by Postgres. Fully async on tokio. SQLx for database access.
 
 ## Status
 
-**Milestone 1 complete.** Data layer implemented: config, DB pool + migrations, pgmq queue operations, work items with structural dedup, semantic memory with hybrid search, OTel telemetry, LLM module. Not yet built: worker trait, scheduling, circuit breaking, IPC, CLI.
+**Milestone 1 (data plane) complete.** Config, DB pool + migrations, pgmq queue operations, work items with structural dedup, semantic memory with hybrid search, OTel telemetry, LLM module. Next: worker trait, control plane scheduling, circuit breaking, domain center orchestration, IPC, CLI.
 
 ## Quick Start
 

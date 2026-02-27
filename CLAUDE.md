@@ -2,7 +2,9 @@
 
 ## What This Is
 
-animus-rs is the Rust data layer for the Animus v2 AI persistence engine. It provides:
+animus-rs is an AI persistence engine covering the full stack: data plane (Postgres-backed work queues and semantic memory), control plane (work scheduling, domain center orchestration), LLM abstraction, and observability.
+
+Milestone 1 (current) implements the data plane foundation:
 - **Work queues** via pgmq (Postgres extension)
 - **Semantic memory** via pgvector (embedding search + hybrid BM25+vector)
 - **LLM abstraction** via rig-core (Anthropic provider)

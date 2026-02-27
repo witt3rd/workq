@@ -21,9 +21,13 @@ async fn full_lifecycle() {
     let db = test_db().await;
     db.create_queue("work").await.unwrap();
 
+    // Use a unique dedup key per run so repeated test runs don't hit dedup
+    let run_id = uuid::Uuid::new_v4();
+    let dedup_key = format!("person=kelly-{run_id}");
+
     // Submit work
     let new = NewWorkItem::new("engage", "heartbeat")
-        .dedup_key("person=kelly")
+        .dedup_key(&dedup_key)
         .params(serde_json::json!({"person": "kelly"}));
     let result = db.submit_work(new).await.unwrap();
     assert!(matches!(

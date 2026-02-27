@@ -1,9 +1,10 @@
 //! # animus-rs
 //!
-//! Postgres-backed data layer for the Animus v2 AI persistence engine.
+//! AI persistence engine built on Postgres.
 //!
-//! Provides work queues (pgmq), semantic memory (pgvector via rig-postgres),
-//! LLM abstraction (rig-core), and OpenTelemetry observability.
+//! Covers the full stack: data plane (work queues via pgmq, semantic memory via
+//! pgvector), control plane (scheduling, domain center orchestration), LLM
+//! abstraction (rig-core), and observability (OpenTelemetry).
 
 pub mod config;
 pub mod db;

@@ -54,8 +54,9 @@ async fn submit_work_creates_and_queues() {
     let db = test_db().await;
     db.create_queue("work").await.unwrap();
 
+    let run_id = uuid::Uuid::new_v4();
     let new = NewWorkItem::new("engage", "heartbeat")
-        .dedup_key("person=kelly")
+        .dedup_key(format!("person=kelly-{run_id}"))
         .params(serde_json::json!({"person": "kelly"}));
 
     let result = db.submit_work(new).await.unwrap();
@@ -71,14 +72,17 @@ async fn submit_duplicate_work_merges() {
     let db = test_db().await;
     db.create_queue("work").await.unwrap();
 
-    let new1 = NewWorkItem::new("engage", "heartbeat").dedup_key("person=kelly");
+    let run_id = uuid::Uuid::new_v4();
+    let dedup_key = format!("person=kelly-{run_id}");
+
+    let new1 = NewWorkItem::new("engage", "heartbeat").dedup_key(&dedup_key);
     let result1 = db.submit_work(new1).await.unwrap();
     assert!(matches!(
         result1,
         animus_rs::db::work::SubmitResult::Created(_)
     ));
 
-    let new2 = NewWorkItem::new("engage", "user").dedup_key("person=kelly");
+    let new2 = NewWorkItem::new("engage", "user").dedup_key(&dedup_key);
     let result2 = db.submit_work(new2).await.unwrap();
     assert!(
         matches!(result2, animus_rs::db::work::SubmitResult::Merged { .. }),

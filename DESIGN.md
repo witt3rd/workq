@@ -1,12 +1,12 @@
 # animus-rs Design
 
-*The Animus v2 AI persistence engine — a Rust rewrite for production deployment.*
+*AI persistence engine — data plane, control plane, LLM abstraction, and observability, built on Postgres.*
 
 ## Origin
 
-animus-rs started as `workq`, a standalone work-tracking engine. When we discovered pgmq (Postgres queue extension), it became clear that pgmq already provides the queue primitives workq was hand-rolling. The project pivoted: instead of a separate work engine, build the full Animus v2 data layer as one well-structured Rust crate.
+animus-rs started as `workq`, a standalone work-tracking engine. When we discovered pgmq (Postgres queue extension), it became clear that pgmq already provides the queue primitives workq was hand-rolling. The project pivoted: build the full Animus system as one well-structured Rust crate — data plane (work queues, semantic memory), control plane (scheduling, domain center orchestration), workers, and observability.
 
-Animus v1 is a Python system with filesystem-based storage (YAML task queues, markdown substrate, ChromaDB for vectors, JSONL logs). It works but has real limitations: no structural dedup, no transactional guarantees, fragile file-based queues, a separate ChromaDB process. animus-rs replaces all of this with Postgres + extensions.
+The predecessor system used filesystem-based storage (YAML task queues, markdown substrate, ChromaDB for vectors, JSONL logs). It worked but had real limitations: no structural dedup, no transactional guarantees, fragile file-based queues, a separate ChromaDB process. animus-rs replaces all of this with Postgres + extensions.
 
 ## The Core Reframe
 
@@ -148,13 +148,41 @@ Currently implements Distinct and Merge. Supersede and Defer are future extensio
 
 ## Observability
 
-Observability uses OpenTelemetry with the GenAI semantic conventions for LLM operations.
+Observability uses OpenTelemetry with the GenAI semantic conventions for LLM operations, backed by the Grafana stack for storage and visualization.
+
+### Telemetry Pipeline
+
+animus-rs emits traces via OTLP gRPC to the observability stack:
+
+```
+animus-rs (tracing + tracing-opentelemetry)
+    → OTLP gRPC (:4317)
+        → Grafana Tempo (traces)
+        → Grafana Loki (logs, future)
+        → Prometheus (metrics, future)
+    → Grafana UI (:3000) — pre-configured datasources
+```
 
 **Traces:** Every work item execution gets a span (`work.execute`) with work type, ID, and state transitions as span events. LLM calls get GenAI spans (`gen_ai.chat`, `gen_ai.embeddings`) with model, provider, and token usage attributes.
 
-**No custom event tables.** Observability flows to standard OTel backends (Jaeger, Grafana, OTLP collector), not into the application database. Postgres stores domain state; OTel handles observability. Cleaner separation.
+**No custom event tables.** Observability flows to the Grafana stack, not into the application database. Postgres stores domain state; OTel handles observability. Cleaner separation.
 
 The `tracing` + `tracing-opentelemetry` bridge means Rust code uses idiomatic `tracing::instrument` / `tracing::info!()` macros, and the OTel layer exports them as spans and logs.
+
+### Observability Stack
+
+The full Grafana stack runs alongside Postgres in Docker Compose:
+
+| Service | Port | Purpose |
+|---------|------|---------|
+| **Tempo** | 4317/4318 | Trace storage, receives OTLP gRPC/HTTP |
+| **Loki** | 3100 | Log aggregation |
+| **Prometheus** | 9090 | Metrics storage |
+| **Grafana** | 3000 | Unified UI with pre-provisioned datasources |
+
+All observability data is persisted in Docker volumes (`tempo-data`, `loki-data`, `prometheus-data`, `grafana-data`). Same volumes across container restarts — no data loss.
+
+Grafana auto-provisions Tempo, Loki, and Prometheus as datasources on startup (`docker/grafana/datasources.yml`). No manual configuration needed — `docker compose up -d` gives you a fully wired observability stack.
 
 ## Storage
 
@@ -193,13 +221,46 @@ The system doesn't care what the worker does. It cares about:
 
 ## Deployment
 
-animus-rs runs on Arch Linux as a systemd user service alongside Postgres. Dev environment uses Docker Compose for Postgres with pgmq + pgvector.
+### Infrastructure Stack
 
-See [docs/db.md](docs/db.md) for the full deployment model.
+One `docker compose up -d` starts everything animus-rs needs:
+
+| Container | Image | Purpose |
+|-----------|-------|---------|
+| **postgres** | Custom (`docker/Dockerfile`) | Postgres 17 + pgmq + pgvector |
+| **tempo** | `grafana/tempo` | Trace storage (OTLP receiver) |
+| **loki** | `grafana/loki` | Log aggregation |
+| **prometheus** | `prom/prometheus` | Metrics storage |
+| **grafana** | `grafana/grafana` | Unified observability UI |
+
+The Postgres image is built from `ghcr.io/pgmq/pg17-pgmq` (pgmq pre-installed) with `postgresql-17-pgvector` added via apt. Extensions are enabled at init time via `docker/init-extensions.sql`. One image, one set of extension versions, no environment drift.
+
+The same Docker Compose stack is used across all environments:
+
+- **Local dev:** `docker compose up -d` — full stack with Grafana UI at `:3000`
+- **CI:** GitHub Actions runs the same containers as service containers
+- **Production:** Same images with production config (volumes, networking, secrets)
+
+### animus-rs Service
+
+animus-rs connects to the stack via two env vars:
+
+- `DATABASE_URL` — Postgres connection string
+- `OTEL_ENDPOINT` — Tempo OTLP endpoint (`:4317`)
+
+Deployment per environment:
+
+- **Local dev:** `cargo run` or tests against Docker Compose
+- **CI:** `cargo test -- --include-ignored` against the service containers
+- **Production (Arch Linux):** systemd user service (`~/.config/systemd/user/animus.service`), secrets via `EnvironmentFile` (chmod 600)
+
+Migrations run at startup (`Db::migrate()`) or manually via `cargo sqlx migrate run`.
+
+See [docs/db.md](docs/db.md) for the full schema and API surface.
 
 ## Implementation Status
 
-### Implemented (Milestone 1: Data Layer)
+### Implemented (Milestone 1: Data Plane)
 - **Config**: Typed env var loading, `secrecy::SecretString`, `dotenvy` for `.env`
 - **DB pool + migrations**: SQLx `PgPool`, three migrations (extensions, work_items, memories)
 - **pgmq operations**: create, send, read, archive, delete via SQL functions
@@ -207,12 +268,15 @@ See [docs/db.md](docs/db.md) for the full deployment model.
 - **Semantic memory**: pgvector storage, vector similarity search (cosine), hybrid BM25+vector
 - **LLM module**: rig-core Anthropic provider factory
 - **OpenTelemetry**: OTel init, GenAI semantic convention spans, work span helpers
+- **Observability stack**: Grafana + Tempo + Loki + Prometheus, pre-wired datasources
+- **Infrastructure**: Docker Compose with Postgres (pgmq + pgvector) + full Grafana stack
 - **Core types**: WorkItem, State, Provenance, Outcome, NewWorkItem builder
 - **State machine**: enforced valid transitions via `State::can_transition_to()`
-- **Test suite**: config, telemetry, DB, pgmq, work, memory, full lifecycle
+- **Test suite**: 14 tests (config, telemetry, DB, pgmq, work, memory, full lifecycle)
 
-### Not Yet Implemented
+### Not Yet Implemented (Milestones 2+: Control Plane, Workers, CLI)
 - Worker trait and worker pool
+- Control plane scheduling and domain center orchestration
 - Capacity management (global + per-type limits)
 - Circuit breaking and backpressure
 - Semantic dedup
