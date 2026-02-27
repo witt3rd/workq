@@ -129,6 +129,24 @@ impl State {
     }
 }
 
+impl std::str::FromStr for State {
+    type Err = crate::error::Error;
+
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+        match s {
+            "created" => Ok(State::Created),
+            "queued" => Ok(State::Queued),
+            "claimed" => Ok(State::Claimed),
+            "running" => Ok(State::Running),
+            "completed" => Ok(State::Completed),
+            "failed" => Ok(State::Failed),
+            "dead" => Ok(State::Dead),
+            "merged" => Ok(State::Merged),
+            other => Err(crate::error::Error::InvalidState(other.to_string())),
+        }
+    }
+}
+
 impl std::fmt::Display for State {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let s = match self {

@@ -31,11 +31,11 @@ This is the foundation. No runtime supervisor or DC orchestration yet -- just th
 ## Module Structure
 
 ```
+migrations/               — SQLx migration files (.sql), run at startup or via sqlx-cli
 src/
   lib.rs                — crate root, re-exports public API
   db/
     mod.rs              — connection pool (shared by SQLx + rig-postgres), migrations, health check
-    migrations/         — SQLx migration files (.sql)
     pgmq.rs             — pgmq queue operations via direct SQLx (send, read, archive, delete)
     work.rs             — work_items table: dedup, provenance, state tracking via direct SQLx
   memory/
@@ -256,17 +256,17 @@ thiserror = "2"
 tokio = { version = "1", features = ["full"] }
 uuid = { version = "1", features = ["v4", "serde"] }
 
-# LLM + Embeddings
-rig-core = "0.11"
-rig-postgres = "0.3"
+# LLM + Embeddings (Rig)
+rig-core = "0.31"
+rig-postgres = "0.1"
 
 # OpenTelemetry
-opentelemetry = "0.28"
-opentelemetry_sdk = { version = "0.28", features = ["rt-tokio"] }
-opentelemetry-otlp = { version = "0.28", features = ["tonic"] }
-opentelemetry-semantic-conventions = "0.28"
+opentelemetry = "0.31"
+opentelemetry_sdk = { version = "0.31", features = ["rt-tokio"] }
+opentelemetry-otlp = { version = "0.31", features = ["grpc-tonic", "trace"] }
+opentelemetry-semantic-conventions = "0.31"
 tracing = "0.1"
-tracing-opentelemetry = "0.29"
+tracing-opentelemetry = "0.32"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 ```
 

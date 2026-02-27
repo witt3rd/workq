@@ -65,7 +65,7 @@ impl Db {
              AND ($6::text IS NULL OR source = $6)
              AND ($7::timestamptz IS NULL OR created_at >= $7)
              ORDER BY
-                (1.0 - (embedding <=> $1::vector)) * 0.7
+                (1.0 / (1e-6 + (embedding <=> $1::vector))) * 0.7
                 + ts_rank(search_text, plainto_tsquery('english', $2)) * 0.3
              DESC
              LIMIT $3",

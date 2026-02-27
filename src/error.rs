@@ -13,6 +13,9 @@ pub enum Error {
     #[error("database error: {0}")]
     Database(#[from] sqlx::Error),
 
+    #[error("invalid state: {0}")]
+    InvalidState(String),
+
     #[error("configuration error: {0}")]
     Config(String),
 

@@ -39,8 +39,18 @@ async fn full_lifecycle() {
     let msg = db.read_from_queue("work", 30).await.unwrap();
     assert!(msg.is_some(), "expected a message in the queue");
 
-    // Archive the message
+    // Verify message payload contains work_item_id
     let msg = msg.unwrap();
+    assert!(
+        msg.message.get("work_item_id").is_some(),
+        "pgmq message should contain work_item_id"
+    );
+    assert!(
+        msg.message.get("params").is_some(),
+        "pgmq message should contain params"
+    );
+
+    // Archive the message
     db.archive_message("work", msg.msg_id).await.unwrap();
 
     // Store a memory
