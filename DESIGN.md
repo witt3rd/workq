@@ -50,7 +50,11 @@ Workers are ephemeral — they exist to do one unit of work, then they're done. 
 - **Duplicate** work is detected and merged (structural or semantic)
 - Every work item either **completes**, **fails** (with retry), or goes **dead** — nothing disappears silently
 
-### 5. Standalone and Reusable
+### 5. Minimal Public Surface
+
+`Engine` is the only public API. All internals — `Storage`, `TxContext`, SQL queries, state mutation — are `pub(crate)`. Consumers cannot bypass the engine to mutate storage directly, which preserves invariants (valid state transitions, transactional atomicity, event recording). New modules default to `pub(crate)` unless there's a reason to expose them.
+
+### 6. Standalone and Reusable
 
 workq is a library, not an application. It knows nothing about LLMs, agents, or domain logic. The host provides:
 - **Worker implementations** — what actually does the work

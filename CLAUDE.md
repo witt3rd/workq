@@ -38,7 +38,6 @@ Edition 2024 — requires Rust 1.85+
 
 - Original spec: `~/src/witt3rd/animus/spec/bus_new.md`
 - `DESIGN.md` — adapted design doc (states, dedup, worker interface, storage)
-- `ISSUES.md` — code review findings: 3 critical, 7 important, 4 minor (transactions, encapsulation, fragile SQL)
 
 ## State Machine
 
@@ -59,4 +58,4 @@ Terminal: Completed, Dead, Merged
 - Logs are scoped to work items — no global log stream, no console streaming
 - Tests use `Engine::in_memory()` — no temp files, no cleanup
 - Pre-commit hook runs fmt + clippy + tests; don't bypass it
-- `Storage` and its methods are `pub` but should be `pub(crate)` per conventions — see `ISSUES.md`
+- Minimal public surface: `Engine` is the only public API; all internals (`Storage`, `TxContext`) are `pub(crate)`. New modules default to `pub(crate)` unless explicitly needed by consumers (see Design Principle #5 in DESIGN.md)
