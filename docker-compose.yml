@@ -18,14 +18,13 @@ services:
       start_period: 10s
 
   tempo:
-    image: grafana/tempo:latest
+    image: grafana/tempo:2.7.2
     command: ["-config.file=/etc/tempo/tempo.yml"]
     volumes:
       - ./docker/tempo.yml:/etc/tempo/tempo.yml
       - tempo-data:/var/tempo
     ports:
-      - "4317:4317"     # OTLP gRPC
-      - "4318:4318"     # OTLP HTTP
+      - "3200:3200"     # Tempo HTTP API (queries)
 
   loki:
     image: grafana/loki:latest
@@ -38,11 +37,27 @@ services:
 
   prometheus:
     image: prom/prometheus:latest
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--web.enable-remote-write-receiver"
     volumes:
       - ./docker/prometheus.yml:/etc/prometheus/prometheus.yml
       - prometheus-data:/prometheus
     ports:
       - "9090:9090"
+
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:latest
+    command: ["--config=/etc/otelcol/config.yml"]
+    volumes:
+      - ./docker/otel-collector.yml:/etc/otelcol/config.yml
+    ports:
+      - "4317:4317"     # OTLP gRPC
+      - "4318:4318"     # OTLP HTTP
+    depends_on:
+      - tempo
+      - loki
+      - prometheus
 
   grafana:
     image: grafana/grafana:latest
