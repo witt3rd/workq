@@ -1,15 +1,16 @@
-# Work Engine Design
+# animus-rs Design
 
-> **Note:** This project has been renamed from **workq** to **animus-rs**. The design
-> has evolved beyond a standalone work engine into a Postgres-backed data layer for
-> the Animus v2 AI persistence engine. See `docs/db.md` for the current database
-> layer design.
+*The Animus v2 AI persistence engine — a Rust rewrite for production deployment.*
 
-*Adapted from the original bus_new spec, which seeded this project.*
+## Origin
+
+animus-rs started as `workq`, a standalone work-tracking engine. When we discovered pgmq (Postgres queue extension), it became clear that pgmq already provides the queue primitives workq was hand-rolling. The project pivoted: instead of a separate work engine, build the full Animus v2 data layer as one well-structured Rust crate.
+
+Animus v1 is a Python system with filesystem-based storage (YAML task queues, markdown substrate, ChromaDB for vectors, JSONL logs). It works but has real limitations: no structural dedup, no transactional guarantees, fragile file-based queues, a separate ChromaDB process. animus-rs replaces all of this with Postgres + extensions.
 
 ## The Core Reframe
 
-workq is a **work engine**, not a message bus. Work items exist, have identity, go through a lifecycle, and the engine ensures they get done exactly once.
+animus-rs is a **work engine**, not a message bus. Work items exist, have identity, go through a lifecycle, and the system ensures they get done exactly once.
 
 This is not request/reply. This is: **something needs doing**.
 
@@ -26,9 +27,9 @@ This is not request/reply. This is: **something needs doing**.
 
 A work item has semantic identity. "Check in with Kelly" is the same work whether it came from a user request, an extracted initiative, or a heartbeat skill.
 
-**Structural dedup** (engine-provided): exact match on `(work_type, dedup_key)` — e.g., `("engage", "person=kelly")` collapses duplicate requests targeting the same person.
+**Structural dedup** (built-in): exact match on `(work_type, dedup_key)` — e.g., `("engage", "person=kelly")` collapses duplicate requests targeting the same person.
 
-**Semantic dedup** (host-provided): LLM or embedding-based similarity for "is this initiative basically the same as that heartbeat task?" — more expensive, used selectively. The engine provides a hook; the host implements the logic.
+**Semantic dedup** (future): LLM or embedding-based similarity for "is this initiative basically the same as that heartbeat task?" — more expensive, used selectively.
 
 ### 2. Work, Not Messages
 
@@ -38,11 +39,11 @@ Work items don't have `from` or `to` fields. They have:
 - **Priority** — how urgent
 - **State** — lifecycle position
 
-Routing is the engine's job. The caller says "this work needs doing" and the engine figures out how.
+The caller says "this work needs doing" and the system figures out how.
 
 ### 3. Dynamic Workers, Not Fixed Processes
 
-Workers are ephemeral — they exist to do one unit of work, then they're done. The engine manages:
+Workers are ephemeral — they exist to do one unit of work, then they're done. The system manages:
 - **Global capacity** — total concurrent workers
 - **Per-type capacity** — e.g., max 3 LLM workers
 - **Backpressure** — queuing with priority ordering
@@ -51,20 +52,21 @@ Workers are ephemeral — they exist to do one unit of work, then they're done. 
 
 ### 4. Work-Once Guarantee
 
-- A work item is **claimed** by exactly one worker
-- **Duplicate** work is detected and merged (structural or semantic)
+- A work item is **claimed** by exactly one worker (pgmq visibility timeout)
+- **Duplicate** work is detected and merged (structural dedup, transactional)
 - Every work item either **completes**, **fails** (with retry), or goes **dead** — nothing disappears silently
 
 ### 5. Minimal Public Surface
 
-`Engine` is the only public API. All internals — `Storage`, `TxContext`, SQL queries, state mutation — are `pub(crate)`. Consumers cannot bypass the engine to mutate storage directly, which preserves invariants (valid state transitions, transactional atomicity, event recording). New modules default to `pub(crate)` unless there's a reason to expose them.
+`Db` is the primary public API. All database operations — work queues, memory, pgmq — go through it. Internal types (`WorkItemRow`, `MemoryEntryRow`, `parse_state`) are private. New modules default to `pub(crate)` unless explicitly needed by consumers.
 
-### 6. Standalone and Reusable
+### 6. Postgres Is the Platform
 
-workq is a library, not an application. It knows nothing about LLMs, agents, or domain logic. The host provides:
-- **Worker implementations** — what actually does the work
-- **Dedup policies** — how to recognize semantic duplicates
-- **Scheduling policies** — priority formulas, capacity limits
+animus-rs does not abstract away the database. Postgres with pgmq + pgvector is a deliberate choice, not a swappable backend. This means:
+- Queue semantics via pgmq SQL functions — not a hand-rolled state machine
+- Vector search via pgvector operators — not a separate vector DB process
+- Transactional guarantees across work items and queue messages
+- One operational dependency, not three
 
 ## Work Item Lifecycle
 
@@ -82,21 +84,21 @@ Created → Dedup Check → Queued → Claimed → Running → Completed
 
 | State | Meaning |
 |-------|---------|
-| **Created** | Submitted, not yet dedup-checked |
-| **Queued** | Ready for execution, waiting for a worker |
-| **Claimed** | Worker assigned, execution starting |
+| **Created** | Submitted, pending dedup check |
+| **Queued** | In pgmq, waiting for a worker |
+| **Claimed** | Worker assigned via pgmq read (visibility timeout) |
 | **Running** | Worker actively processing |
 | **Completed** | Done successfully |
-| **Failed** | Unexpected failure, may be retried |
+| **Failed** | Execution error, may be retried |
 | **Dead** | Exhausted retries or poisoned — terminal |
-| **Merged** | Duplicate of existing work — linked to canonical item, terminal |
+| **Merged** | Structural dedup hit — linked to canonical item, terminal |
 
 ### Valid State Transitions
 
 ```
-Created  → Queued       (passed dedup, ready for execution)
+Created  → Queued       (passed dedup, sent to pgmq)
 Created  → Merged       (structural dedup hit)
-Queued   → Claimed      (worker assigned)
+Queued   → Claimed      (worker assigned via pgmq.read)
 Queued   → Dead         (cancelled or circuit-broken)
 Claimed  → Running      (worker started)
 Claimed  → Queued       (worker failed to start, re-queue)
@@ -105,6 +107,8 @@ Running  → Failed       (execution error)
 Failed   → Queued       (retry)
 Failed   → Dead         (exhausted retries)
 ```
+
+Transitions are enforced by `State::can_transition_to()` in `model/work.rs`.
 
 ### Provenance
 
@@ -117,15 +121,19 @@ Provenance {
 }
 ```
 
-When work is merged, both provenances are preserved via `merged_provenance`. You can always answer "why does this work exist?" and "who asked for it?"
+When work is merged, the canonical item retains its provenance and the merged item's origin is preserved via the `merged_into` relationship.
 
 ## Structural Dedup
 
-When creating work with a `dedup_key`, the engine checks: is there already a work item with the same `(work_type, dedup_key)` that is queued, claimed, or running? If so, **merge** — the new item links to the existing one, both provenances are recorded, only one execution happens.
+When submitting work with a `dedup_key`, the system checks: is there already a work item with the same `(work_type, dedup_key)` in a non-terminal state? If so, **merge** — the new item is marked as merged and linked to the canonical item.
 
-The entire submit flow (insert + dedup check + merge-or-queue + pgmq send) runs within a single Postgres transaction. This guarantees crash safety (no orphaned `Created` items) and correctness under concurrent access (two submits with the same dedup key cannot both slip through). The transactional boundary is designed so additional dedup strategies can be plugged in within the same atomic operation.
+The entire submit flow runs within a single Postgres transaction:
+1. Insert work_items row (state = `created`)
+2. Check dedup against the partial index on `(work_type, dedup_key)`
+3. If match: mark as `merged`, set `merged_into`, commit
+4. If no match: `pgmq.send()` to queue, update state to `queued`, commit
 
-The dedup window covers all non-terminal states. A configurable time-based window for recently-completed work is a planned extension ("don't re-check a project within 1 hour of the last check").
+This guarantees crash safety and correctness under concurrent access.
 
 ### Dedup Verdicts (Future)
 
@@ -136,57 +144,33 @@ The dedup window covers all non-terminal states. A configurable time-based windo
 | **Supersede** | New work replaces old (e.g., updated instructions) |
 | **Defer** | Same work but hold off — context may have changed |
 
-Currently the engine implements Distinct and Merge. Supersede and Defer are extension points for the host.
+Currently implements Distinct and Merge. Supersede and Defer are future extensions.
 
 ## Observability
 
-Observability is a first-class design concern. The engine is **designed to be watched**.
+Observability uses OpenTelemetry with the GenAI semantic conventions for LLM operations.
 
-### Event Stream
+**Traces:** Every work item execution gets a span (`work.execute`) with work type, ID, and state transitions as span events. LLM calls get GenAI spans (`gen_ai.chat`, `gen_ai.embeddings`) with model, provider, and token usage attributes.
 
-Every state transition emits a structured event with a monotonic sequence number:
+**No custom event tables.** Observability flows to standard OTel backends (Jaeger, Grafana, OTLP collector), not into the application database. Postgres stores domain state; OTel handles observability. Cleaner separation.
 
-```
-WorkCreated { id, work_type, dedup_key, priority, source }
-WorkMerged { id, canonical_id, reason }
-WorkQueued { id, priority }
-WorkClaimed { id, worker_id }
-WorkRunning { id, worker_id }
-WorkCompleted { id, duration_ms }
-WorkFailed { id, error, retryable, attempt }
-WorkDead { id, reason, attempts }
-WorkSpawned { parent_id, child_ids }
-```
+The `tracing` + `tracing-opentelemetry` bridge means Rust code uses idiomatic `tracing::instrument` / `tracing::info!()` macros, and the OTel layer exports them as spans and logs.
 
-Events are the engine's voice — state transitions and scheduling decisions. Logs are the worker's voice — what's happening inside execution.
+## Storage
 
-### Work-Scoped Logging
+Postgres with pgmq (queue extension) and pgvector (embedding search). The database is the single source of truth — work items, queue messages, and memories all live in Postgres.
 
-Every work item has a log. No global log stream, no console streaming. Logs are scoped to work items and stored with them.
+Two-layer data access:
+- **Direct SQLx** (`db/` module): pgmq operations, work_items dedup/provenance, custom queries
+- **rig-postgres** (`memory/` module): pgvector VectorStoreIndex for embedding storage and search
 
-```rust
-engine.log(work_id, LogLevel::Info, "Starting engagement with Kelly");
-engine.log(work_id, LogLevel::Error, "API timeout after 30s");
-```
+Both share the same `sqlx::PgPool`. Migrations managed by SQLx (`./migrations/`).
 
-Failure diagnosis = pull the item's logs. No grepping through shared log files.
-
-### Snapshot State (Future)
-
-Queryable system state via CLI and API:
-
-```bash
-workq status                            # Overview
-workq list --state=running              # What's executing
-workq list --state=queued --type=engage # What's waiting
-workq show <id>                         # Full item history
-workq logs <id>                         # Item logs
-workq logs <id> --follow                # Tail running item
-```
+See [docs/db.md](docs/db.md) for the full schema, API surface, and deployment details.
 
 ## Worker Interface (Future)
 
-Workers are host-provided. The engine defines the contract:
+Workers are provided by the host. The system defines the contract:
 
 ```rust
 trait Worker {
@@ -202,60 +186,49 @@ enum WorkOutcome {
 }
 ```
 
-The engine doesn't care what the worker does. It cares about:
+The system doesn't care what the worker does. It cares about:
 - Did it succeed or fail?
 - How long did it take?
 - Did it spawn child work?
 
-## Storage
+## Deployment
 
-Postgres with pgmq (queue extension) and pgvector (embedding search). Replaced the original SQLite storage layer to support queue semantics and vector similarity search natively.
+animus-rs runs on Arch Linux as a systemd user service alongside Postgres. Dev environment uses Docker Compose for Postgres with pgmq + pgvector.
 
-The database is the single source of truth. Work items, queue messages, and memories all live in Postgres. Migrations managed by SQLx (`./migrations/`). Connection pooling via `sqlx::PgPool`.
-
-## Deployment Model (Future)
-
-One engine process, dynamic workers. The engine is a systemd service that connects to Postgres, runs the scheduler, and spawns workers as needed.
-
-Workers run in-process (Rust-native) or as child processes (Python, etc.) spawned by the engine. The engine caps concurrency globally and per-type.
-
-External work sources (Telegram, CLI, other apps) submit work via IPC (Unix domain socket). They're separate processes — work sources, not workers.
-
-Dev environment uses Docker Compose (`docker-compose.yml`) for Postgres with pgmq + pgvector extensions.
+See [docs/db.md](docs/db.md) for the full deployment model.
 
 ## Implementation Status
 
-### Implemented (Postgres-backed data layer)
-- **Config module**: Typed env var loading, `secrecy::SecretString` for secrets, `dotenvy` for `.env`
-- **Database pool + migrations**: SQLx `PgPool`, migration runner (`./migrations/`)
-- **pgmq queue operations**: create, send, read, archive, delete via SQL functions
-- **Work items**: submit with structural dedup on `(work_type, dedup_key)`, transactional insert + dedup check + pgmq send
-- **Semantic memory**: pgvector storage, vector similarity search (cosine), hybrid BM25+vector search
+### Implemented (Milestone 1: Data Layer)
+- **Config**: Typed env var loading, `secrecy::SecretString`, `dotenvy` for `.env`
+- **DB pool + migrations**: SQLx `PgPool`, three migrations (extensions, work_items, memories)
+- **pgmq operations**: create, send, read, archive, delete via SQL functions
+- **Work items**: submit with structural dedup, transactional insert + dedup check + pgmq send
+- **Semantic memory**: pgvector storage, vector similarity search (cosine), hybrid BM25+vector
 - **LLM module**: rig-core Anthropic provider factory
-- **OpenTelemetry**: OTel init, GenAI semantic convention spans for LLM calls, work span helpers
-- Core types: WorkItem, State, Provenance, Outcome, NewWorkItem builder
-- State machine with enforced valid transitions
-- Integration test suite (DB, pgmq, work, memory, telemetry, full lifecycle)
+- **OpenTelemetry**: OTel init, GenAI semantic convention spans, work span helpers
+- **Core types**: WorkItem, State, Provenance, Outcome, NewWorkItem builder
+- **State machine**: enforced valid transitions via `State::can_transition_to()`
+- **Test suite**: config, telemetry, DB, pgmq, work, memory, full lifecycle
 
 ### Not Yet Implemented
 - Worker trait and worker pool
 - Capacity management (global + per-type limits)
-- Circuit breaking
-- Semantic dedup hook
+- Circuit breaking and backpressure
+- Semantic dedup
 - Dedup time window (recently-completed)
-- Supersede / Defer dedup verdicts
 - Child work spawning and continuations
 - IPC layer (Unix domain socket)
-- CLI commands (status, list, show, logs, watch)
+- CLI commands (status, list, show, logs)
 - `animus serve` daemon mode
-- Metrics aggregation
-- Checkpointing for long-running work
-- SQLx offline metadata for CI (Task 14)
+- SQLx offline metadata for CI
 
 ## Open Design Questions
 
+- **Worker interface**: trait-based or message-passing? In-process only or support child processes?
 - **IPC protocol**: JSON lines vs protobuf over Unix domain socket
-- **Semantic dedup hook**: `TxContext` provides the transactional execution boundary — remaining question is the host-facing API shape (trait-based callback vs channel-based async)
-- **Priority formula**: engine-provided age boost, or fully host-controlled?
+- **Semantic dedup**: embedding similarity threshold, when to invoke, cost control
+- **Priority formula**: system-provided age boost, or fully host-controlled?
 - **Configuration**: TOML for work type definitions (capacity, retry policy, priority)
 - **Child work**: how to express continuations that run when all children complete
+- **Embedding provider**: Anthropic doesn't support embeddings via rig-core; need a separate provider
