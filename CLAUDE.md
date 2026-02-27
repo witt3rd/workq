@@ -2,9 +2,7 @@
 
 ## What This Is
 
-workq is a standalone work-tracking engine in Rust. It ensures work gets done exactly once via structural deduplication, priority scheduling, and lifecycle management.
-
-This is a library, not an application. The host (first consumer: [animus](~/src/witt3rd/animus)) provides worker implementations and policies.
+animus-rs is the Rust data layer for the Animus v2 AI persistence engine. It provides work queues, semantic memory, LLM abstraction, and observability backed by Postgres.
 
 ## Commands
 
@@ -26,7 +24,7 @@ CI (GitHub Actions) runs the same checks on push/PR to master with `RUSTFLAGS="-
 | `src/storage.rs` | SQLite storage layer: schema, queries, state transitions |
 | `src/event.rs` | Structured event types emitted on every state transition |
 | `src/error.rs` | Error types |
-| `src/bin/workq.rs` | CLI binary (placeholder) |
+| `src/bin/animus.rs` | CLI binary (placeholder) |
 | `tests/engine_test.rs` | Integration tests covering lifecycle, dedup, retry, logs, events |
 
 ## Dependencies

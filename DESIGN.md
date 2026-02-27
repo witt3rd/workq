@@ -1,5 +1,10 @@
 # Work Engine Design
 
+> **Note:** This project has been renamed from **workq** to **animus-rs**. The design
+> has evolved beyond a standalone work engine into a Postgres-backed data layer for
+> the Animus v2 AI persistence engine. See `docs/db.md` for the current database
+> layer design.
+
 *Adapted from the original bus_new spec, which seeded this project.*
 
 ## The Core Reframe

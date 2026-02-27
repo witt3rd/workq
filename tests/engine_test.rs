@@ -1,8 +1,8 @@
 //! Integration tests for the work engine.
 
+use animus_rs::engine::{Engine, SubmitResult};
+use animus_rs::model::*;
 use serde_json::json;
-use workq::engine::{Engine, SubmitResult};
-use workq::model::*;
 
 fn test_engine() -> Engine {
     Engine::in_memory().expect("failed to create in-memory engine")

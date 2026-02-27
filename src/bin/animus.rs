@@ -1,6 +1,6 @@
-//! workq CLI — placeholder for inspection tool.
+//! animus CLI — placeholder for inspection tool.
 
 fn main() {
-    println!("workq - work tracking engine");
+    println!("animus - AI persistence engine");
     println!("CLI not yet implemented. See `cargo test` for current functionality.");
 }

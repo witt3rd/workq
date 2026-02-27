@@ -1,12 +1,10 @@
-# workq
+# animus-rs
 
-A work-tracking engine. Not a message bus — a system that ensures work gets done exactly once.
+Postgres-backed data layer for the Animus v2 AI persistence engine.
 
 ## What This Is
 
-workq tracks work items through their lifecycle: submit → dedup → queue → claim → execute → complete. It provides structural deduplication, priority scheduling, retry with poison pill detection, and full observability via events and work-scoped logs.
-
-The engine is a library. The host application provides worker implementations and policies. workq knows nothing about what the work *is* — it knows about work items, lifecycle, scheduling, and guarantees.
+animus-rs provides work queues, semantic memory, LLM abstraction, and observability for the Animus v2 system. It tracks work items through their lifecycle: submit, dedup, queue, claim, execute, complete. It provides structural deduplication, priority scheduling, retry with poison pill detection, and full observability via events and work-scoped logs.
 
 ## Status
 
@@ -15,8 +13,8 @@ The engine is a library. The host application provides worker implementations an
 ## Quick Start
 
 ```rust
-use workq::engine::Engine;
-use workq::model::*;
+use animus_rs::engine::Engine;
+use animus_rs::model::*;
 
 let mut engine = Engine::in_memory()?;
 

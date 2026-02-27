@@ -1,8 +1,8 @@
 [package]
-name = "workq"
+name = "animus-rs"
 version = "0.1.0"
 edition = "2024"
-description = "A work-tracking engine with dedup, scheduling, and observability"
+description = "Animus v2 engine — Postgres-backed data layer for AI persistence"
 license = "MIT"
 
 [dependencies]
@@ -14,5 +14,5 @@ thiserror = "2"
 uuid = { version = "1", features = ["v4", "serde"] }
 
 [[bin]]
-name = "workq"
-path = "src/bin/workq.rs"
+name = "animus"
+path = "src/bin/animus.rs"
