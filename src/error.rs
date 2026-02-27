@@ -4,17 +4,17 @@ use thiserror::Error;
 
 #[derive(Debug, Error)]
 pub enum Error {
-    #[error("work item not found: {0}")]
+    #[error("not found: {0}")]
     NotFound(String),
 
-    #[error("invalid state transition: {from:?} -> {to:?}")]
-    InvalidTransition {
-        from: crate::model::State,
-        to: crate::model::State,
-    },
+    #[error("invalid state transition: {from} -> {to}")]
+    InvalidTransition { from: String, to: String },
 
-    #[error("storage error: {0}")]
-    Storage(#[from] rusqlite::Error),
+    #[error("database error: {0}")]
+    Database(#[from] sqlx::Error),
+
+    #[error("configuration error: {0}")]
+    Config(String),
 
     #[error("{0}")]
     Other(String),

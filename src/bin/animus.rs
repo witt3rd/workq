@@ -1,6 +1,6 @@
-//! animus CLI — placeholder for inspection tool.
+//! animus CLI binary.
 
 fn main() {
     println!("animus - AI persistence engine");
-    println!("CLI not yet implemented. See `cargo test` for current functionality.");
+    println!("Use as a library: animus_rs::db, animus_rs::memory, etc.");
 }

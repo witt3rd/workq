@@ -5,8 +5,10 @@
 //! Provides work queues (pgmq), semantic memory (pgvector via rig-postgres),
 //! LLM abstraction (rig-core), and OpenTelemetry observability.
 
-pub mod engine;
+pub mod config;
+pub mod db;
 pub mod error;
-pub mod event;
+pub mod llm;
+pub mod memory;
 pub mod model;
-pub(crate) mod storage;
+pub mod telemetry;

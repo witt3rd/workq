@@ -1,4 +1,4 @@
-//! Core data model.
+//! Core work item types.
 //!
 //! A work item is something that needs doing. It has identity (type + dedup key),
 //! provenance (where it came from), priority, and lifecycle state.
@@ -176,44 +176,11 @@ pub struct Outcome {
 }
 
 // ---------------------------------------------------------------------------
-// Log Entry
-// ---------------------------------------------------------------------------
-
-/// A log entry scoped to a work item.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct LogEntry {
-    pub work_id: WorkId,
-    pub timestamp: DateTime<Utc>,
-    pub level: LogLevel,
-    pub message: String,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum LogLevel {
-    Debug,
-    Info,
-    Warn,
-    Error,
-}
-
-impl std::fmt::Display for LogLevel {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let s = match self {
-            LogLevel::Debug => "DEBUG",
-            LogLevel::Info => "INFO",
-            LogLevel::Warn => "WARN",
-            LogLevel::Error => "ERROR",
-        };
-        write!(f, "{s}")
-    }
-}
-
-// ---------------------------------------------------------------------------
 // Builder
 // ---------------------------------------------------------------------------
 
 /// Builder for creating new work items. The engine's public API for submitting work.
+#[allow(dead_code)]
 pub struct NewWorkItem {
     pub(crate) work_type: String,
     pub(crate) dedup_key: Option<String>,
