@@ -48,6 +48,18 @@ impl TxContext<'_> {
     pub fn record_event(&mut self, kind: EventKind) -> Result<Event> {
         record_event_on(self.tx, kind)
     }
+
+    pub fn claim_next(&self) -> Result<Option<WorkItem>> {
+        claim_next_on(self.tx)
+    }
+
+    pub fn increment_attempts(&self, id: WorkId) -> Result<u32> {
+        increment_attempts_on(self.tx, id)
+    }
+
+    pub fn set_outcome(&self, id: WorkId, outcome: &Outcome) -> Result<()> {
+        set_outcome_on(self.tx, id, outcome)
+    }
 }
 
 impl Storage {
@@ -197,17 +209,7 @@ impl Storage {
     /// Fetch the next queued work item (highest priority, oldest first).
     /// Returns None if no items are queued. Uses LIMIT 1 to avoid loading the entire queue.
     pub fn claim_next(&self) -> Result<Option<WorkItem>> {
-        let mut stmt = self.conn.prepare(
-            "SELECT * FROM work_items WHERE state = 'queued' ORDER BY priority DESC, created_at ASC LIMIT 1",
-        )?;
-        let mut rows = stmt.query_map([], |row| Ok(row_to_work_item(row)))?;
-        match rows.next() {
-            Some(Ok(item)) => Ok(Some(
-                item.map_err(|e| Error::Other(format!("parse error: {e}")))?,
-            )),
-            Some(Err(e)) => Err(e.into()),
-            None => Ok(None),
-        }
+        claim_next_on(&self.conn)
     }
 
     /// Set merged_into and record the merged provenance.
@@ -217,35 +219,12 @@ impl Storage {
 
     /// Increment attempt count.
     pub fn increment_attempts(&mut self, id: WorkId) -> Result<u32> {
-        let now = Utc::now().to_rfc3339();
-        self.conn.execute(
-            "UPDATE work_items SET attempts = attempts + 1, updated_at = ?1 WHERE id = ?2",
-            params![now, id.0.to_string()],
-        )?;
-
-        let attempts: u32 = self.conn.query_row(
-            "SELECT attempts FROM work_items WHERE id = ?1",
-            params![id.0.to_string()],
-            |row| row.get(0),
-        )?;
-
-        Ok(attempts)
+        increment_attempts_on(&self.conn, id)
     }
 
     /// Store an outcome on a work item.
     pub fn set_outcome(&mut self, id: WorkId, outcome: &Outcome) -> Result<()> {
-        let now = Utc::now().to_rfc3339();
-        self.conn.execute(
-            "UPDATE work_items SET outcome_data = ?1, outcome_error = ?2, outcome_ms = ?3, updated_at = ?4 WHERE id = ?5",
-            params![
-                outcome.data.as_ref().map(|d| serde_json::to_string(d).unwrap_or_default()),
-                outcome.error,
-                outcome.duration_ms as i64,
-                now,
-                id.0.to_string(),
-            ],
-        )?;
-        Ok(())
+        set_outcome_on(&self.conn, id, outcome)
     }
 
     // -----------------------------------------------------------------------
@@ -493,30 +472,91 @@ fn record_event_on(conn: &Connection, kind: EventKind) -> Result<Event> {
     })
 }
 
+fn claim_next_on(conn: &Connection) -> Result<Option<WorkItem>> {
+    let mut stmt = conn.prepare(
+        "SELECT * FROM work_items WHERE state = 'queued' ORDER BY priority DESC, created_at ASC LIMIT 1",
+    )?;
+    let mut rows = stmt.query_map([], |row| Ok(row_to_work_item(row)))?;
+    match rows.next() {
+        Some(Ok(item)) => Ok(Some(
+            item.map_err(|e| Error::Other(format!("parse error: {e}")))?,
+        )),
+        Some(Err(e)) => Err(e.into()),
+        None => Ok(None),
+    }
+}
+
+fn increment_attempts_on(conn: &Connection, id: WorkId) -> Result<u32> {
+    let now = Utc::now().to_rfc3339();
+    conn.execute(
+        "UPDATE work_items SET attempts = attempts + 1, updated_at = ?1 WHERE id = ?2",
+        params![now, id.0.to_string()],
+    )?;
+
+    let attempts: u32 = conn.query_row(
+        "SELECT attempts FROM work_items WHERE id = ?1",
+        params![id.0.to_string()],
+        |row| row.get(0),
+    )?;
+
+    Ok(attempts)
+}
+
+fn set_outcome_on(conn: &Connection, id: WorkId, outcome: &Outcome) -> Result<()> {
+    let now = Utc::now().to_rfc3339();
+    conn.execute(
+        "UPDATE work_items SET outcome_data = ?1, outcome_error = ?2, outcome_ms = ?3, updated_at = ?4 WHERE id = ?5",
+        params![
+            outcome.data.as_ref().map(|d| serde_json::to_string(d).unwrap_or_default()),
+            outcome.error,
+            i64::try_from(outcome.duration_ms).unwrap_or(i64::MAX),
+            now,
+            id.0.to_string(),
+        ],
+    )?;
+    Ok(())
+}
+
 // ---------------------------------------------------------------------------
 // Row parsing helpers
 // ---------------------------------------------------------------------------
 
 fn row_to_work_item(row: &rusqlite::Row) -> std::result::Result<WorkItem, String> {
-    let id_str: String = row.get(0).map_err(|e| e.to_string())?;
-    let params_str: String = row.get(5).map_err(|e| e.to_string())?;
-    let state_str: String = row.get(7).map_err(|e| e.to_string())?;
-    let merged_str: Option<String> = row.get(8).map_err(|e| e.to_string())?;
-    let parent_str: Option<String> = row.get(9).map_err(|e| e.to_string())?;
-    let created_str: String = row.get(15).map_err(|e| e.to_string())?;
-    let updated_str: String = row.get(16).map_err(|e| e.to_string())?;
-    let completed_str: Option<String> = row.get(17).map_err(|e| e.to_string())?;
+    let id_str: String = row.get::<_, String>("id").map_err(|e| e.to_string())?;
+    let params_str: String = row.get::<_, String>("params").map_err(|e| e.to_string())?;
+    let state_str: String = row.get::<_, String>("state").map_err(|e| e.to_string())?;
+    let merged_str: Option<String> = row
+        .get::<_, Option<String>>("merged_into")
+        .map_err(|e| e.to_string())?;
+    let parent_str: Option<String> = row
+        .get::<_, Option<String>>("parent_id")
+        .map_err(|e| e.to_string())?;
+    let created_str: String = row
+        .get::<_, String>("created_at")
+        .map_err(|e| e.to_string())?;
+    let updated_str: String = row
+        .get::<_, String>("updated_at")
+        .map_err(|e| e.to_string())?;
+    let completed_str: Option<String> = row
+        .get::<_, Option<String>>("completed_at")
+        .map_err(|e| e.to_string())?;
 
     Ok(WorkItem {
         id: WorkId(id_str.parse().map_err(|e: uuid::Error| e.to_string())?),
-        work_type: row.get(1).map_err(|e| e.to_string())?,
-        dedup_key: row.get(2).map_err(|e| e.to_string())?,
+        work_type: row
+            .get::<_, String>("work_type")
+            .map_err(|e| e.to_string())?,
+        dedup_key: row
+            .get::<_, Option<String>>("dedup_key")
+            .map_err(|e| e.to_string())?,
         provenance: Provenance {
-            source: row.get(3).map_err(|e| e.to_string())?,
-            trigger: row.get(4).map_err(|e| e.to_string())?,
+            source: row.get::<_, String>("source").map_err(|e| e.to_string())?,
+            trigger: row
+                .get::<_, Option<String>>("trigger_")
+                .map_err(|e| e.to_string())?,
         },
         params: serde_json::from_str(&params_str).unwrap_or(serde_json::Value::Null),
-        priority: row.get(6).map_err(|e| e.to_string())?,
+        priority: row.get::<_, i32>("priority").map_err(|e| e.to_string())?,
         state: parse_state(&state_str).map_err(|e| e.to_string())?,
         merged_into: merged_str
             .map(|s| s.parse().map(WorkId))
@@ -526,8 +566,10 @@ fn row_to_work_item(row: &rusqlite::Row) -> std::result::Result<WorkItem, String
             .map(|s| s.parse().map(WorkId))
             .transpose()
             .map_err(|e: uuid::Error| e.to_string())?,
-        attempts: row.get(10).map_err(|e| e.to_string())?,
-        max_attempts: row.get(11).map_err(|e| e.to_string())?,
+        attempts: row.get::<_, u32>("attempts").map_err(|e| e.to_string())?,
+        max_attempts: row
+            .get::<_, Option<u32>>("max_attempts")
+            .map_err(|e| e.to_string())?,
         created_at: created_str
             .parse()
             .map_err(|_| "invalid created_at".to_string())?,
