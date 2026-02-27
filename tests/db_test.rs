@@ -1,4 +1,5 @@
 use animus_rs::db::Db;
+use animus_rs::model::work::NewWorkItem;
 use serde_json::json;
 
 /// Helper: connect + migrate for tests.
@@ -45,4 +46,42 @@ async fn pgmq_send_and_read() {
     // Queue should be empty now
     let msg = db.read_from_queue("test_work", 30).await.unwrap();
     assert!(msg.is_none());
+}
+
+#[tokio::test]
+#[ignore] // Requires running Postgres with pgmq
+async fn submit_work_creates_and_queues() {
+    let db = test_db().await;
+    db.create_queue("work").await.unwrap();
+
+    let new = NewWorkItem::new("engage", "heartbeat")
+        .dedup_key("person=kelly")
+        .params(serde_json::json!({"person": "kelly"}));
+
+    let result = db.submit_work(new).await.unwrap();
+    assert!(
+        matches!(result, animus_rs::db::work::SubmitResult::Created(_)),
+        "expected Created, got {result:?}"
+    );
+}
+
+#[tokio::test]
+#[ignore] // Requires running Postgres with pgmq
+async fn submit_duplicate_work_merges() {
+    let db = test_db().await;
+    db.create_queue("work").await.unwrap();
+
+    let new1 = NewWorkItem::new("engage", "heartbeat").dedup_key("person=kelly");
+    let result1 = db.submit_work(new1).await.unwrap();
+    assert!(matches!(
+        result1,
+        animus_rs::db::work::SubmitResult::Created(_)
+    ));
+
+    let new2 = NewWorkItem::new("engage", "user").dedup_key("person=kelly");
+    let result2 = db.submit_work(new2).await.unwrap();
+    assert!(
+        matches!(result2, animus_rs::db::work::SubmitResult::Merged { .. }),
+        "expected Merged, got {result2:?}"
+    );
 }

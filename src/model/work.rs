@@ -180,7 +180,6 @@ pub struct Outcome {
 // ---------------------------------------------------------------------------
 
 /// Builder for creating new work items. The engine's public API for submitting work.
-#[allow(dead_code)]
 pub struct NewWorkItem {
     pub(crate) work_type: String,
     pub(crate) dedup_key: Option<String>,
