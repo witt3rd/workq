@@ -46,7 +46,7 @@ Edition 2024 — requires Rust 1.85+
 ## Design Docs
 
 - `docs/db.md` — Database layer design (schema, API, deployment)
-- `DESIGN.md` — Original work engine design (states, dedup, worker interface)
+- `DESIGN.md` — System design (principles, state machine, dedup, observability)
 - `docs/plans/` — Implementation plans
 
 ## State Machine
