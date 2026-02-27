@@ -123,7 +123,7 @@ When work is merged, both provenances are preserved via `merged_provenance`. You
 
 When creating work with a `dedup_key`, the engine checks: is there already a work item with the same `(work_type, dedup_key)` that is queued, claimed, or running? If so, **merge** — the new item links to the existing one, both provenances are recorded, only one execution happens.
 
-The entire submit flow (insert + dedup check + merge-or-queue + event recording) runs within a single SQLite transaction. This guarantees crash safety (no orphaned `Created` items) and correctness under concurrent access (two submits with the same dedup key cannot both slip through). The transactional boundary (`TxContext`) is designed so additional dedup strategies can be plugged in within the same atomic operation.
+The entire submit flow (insert + dedup check + merge-or-queue + pgmq send) runs within a single Postgres transaction. This guarantees crash safety (no orphaned `Created` items) and correctness under concurrent access (two submits with the same dedup key cannot both slip through). The transactional boundary is designed so additional dedup strategies can be plugged in within the same atomic operation.
 
 The dedup window covers all non-terminal states. A configurable time-based window for recently-completed work is a planned extension ("don't re-check a project within 1 hour of the last check").
 
@@ -209,49 +209,48 @@ The engine doesn't care what the worker does. It cares about:
 
 ## Storage
 
-SQLite with WAL mode. Single file, embeddable, queryable, supports concurrent readers.
+Postgres with pgmq (queue extension) and pgvector (embedding search). Replaced the original SQLite storage layer to support queue semantics and vector similarity search natively.
 
-The database is the single source of truth. Events are emitted as side effects of state transitions. Queries read the database directly. No divergence possible.
+The database is the single source of truth. Work items, queue messages, and memories all live in Postgres. Migrations managed by SQLx (`./migrations/`). Connection pooling via `sqlx::PgPool`.
 
 ## Deployment Model (Future)
 
-One engine process, dynamic workers. The engine is a daemon that owns the SQLite database, runs the scheduler, and spawns workers as needed.
+One engine process, dynamic workers. The engine is a systemd service that connects to Postgres, runs the scheduler, and spawns workers as needed.
 
 Workers run in-process (Rust-native) or as child processes (Python, etc.) spawned by the engine. The engine caps concurrency globally and per-type.
 
 External work sources (Telegram, CLI, other apps) submit work via IPC (Unix domain socket). They're separate processes — work sources, not workers.
 
+Dev environment uses Docker Compose (`docker-compose.yml`) for Postgres with pgmq + pgvector extensions.
+
 ## Implementation Status
 
-### Implemented
-- Core types: WorkItem, State, Provenance, Outcome, LogEntry, NewWorkItem builder
+### Implemented (Postgres-backed data layer)
+- **Config module**: Typed env var loading, `secrecy::SecretString` for secrets, `dotenvy` for `.env`
+- **Database pool + migrations**: SQLx `PgPool`, migration runner (`./migrations/`)
+- **pgmq queue operations**: create, send, read, archive, delete via SQL functions
+- **Work items**: submit with structural dedup on `(work_type, dedup_key)`, transactional insert + dedup check + pgmq send
+- **Semantic memory**: pgvector storage, vector similarity search (cosine), hybrid BM25+vector search
+- **LLM module**: rig-core Anthropic provider factory
+- **OpenTelemetry**: OTel init, GenAI semantic convention spans for LLM calls, work span helpers
+- Core types: WorkItem, State, Provenance, Outcome, NewWorkItem builder
 - State machine with enforced valid transitions
-- Structural dedup on `(work_type, dedup_key)`
-- Transactional submit (atomic insert + dedup check + state transition + events)
-- Merge with provenance preservation and state transition validation
-- Priority-ordered claiming
-- Retry with configurable max attempts
-- Poison pill detection (fail → dead after exhausted retries)
-- Work-scoped logging
-- Structured event stream with monotonic sequencing
-- SQLite storage with WAL mode and partial indexes
-- Transaction support (`TxContext` + `with_transaction`) for multi-step atomic operations
-- In-memory mode for tests
-- Integration test suite (15 tests)
+- Integration test suite (DB, pgmq, work, memory, telemetry, full lifecycle)
 
 ### Not Yet Implemented
 - Worker trait and worker pool
 - Capacity management (global + per-type limits)
 - Circuit breaking
-- Semantic dedup hook (transactional infrastructure in place via `TxContext`)
+- Semantic dedup hook
 - Dedup time window (recently-completed)
 - Supersede / Defer dedup verdicts
 - Child work spawning and continuations
 - IPC layer (Unix domain socket)
 - CLI commands (status, list, show, logs, watch)
-- `workq serve` daemon mode
+- `animus serve` daemon mode
 - Metrics aggregation
 - Checkpointing for long-running work
+- SQLx offline metadata for CI (Task 14)
 
 ## Open Design Questions
 

@@ -2,40 +2,52 @@
 
 ## What This Is
 
-animus-rs is the Rust data layer for the Animus v2 AI persistence engine. It provides work queues, semantic memory, LLM abstraction, and observability backed by Postgres.
+animus-rs is the Rust data layer for the Animus v2 AI persistence engine. It provides:
+- **Work queues** via pgmq (Postgres extension)
+- **Semantic memory** via pgvector (embedding search + hybrid BM25+vector)
+- **LLM abstraction** via rig-core (Anthropic provider)
+- **Observability** via OpenTelemetry with GenAI semantic conventions
+
+Postgres-only. Fully async on tokio. SQLx for database access.
 
 ## Commands
 
 ```bash
-cargo test              # Run all tests (12 integration tests)
-cargo clippy            # Lint
-cargo build             # Build library + CLI binary
+cargo test                        # Run unit tests (requires no Postgres)
+cargo test -- --ignored           # Run integration tests (requires Postgres)
+cargo clippy                      # Lint
+cargo build                       # Build library + CLI binary
+docker compose up -d              # Start dev Postgres (pgmq + pgvector)
 ```
 
 Pre-commit hook (`.githooks/pre-commit`) runs `cargo fmt --check`, `cargo test`, and `cargo clippy -D warnings`.
-CI (GitHub Actions) runs the same checks on push/PR to master with `RUSTFLAGS="-D warnings"`.
 
 ## Architecture
 
-| File | Purpose |
-|------|---------|
-| `src/model.rs` | Core types: WorkItem, State, Provenance, Outcome, LogEntry, NewWorkItem builder |
-| `src/engine.rs` | Public API: submit, claim, start, complete, fail, log, events |
-| `src/storage.rs` | SQLite storage layer: schema, queries, state transitions |
-| `src/event.rs` | Structured event types emitted on every state transition |
+| Module | Purpose |
+|--------|---------|
+| `src/config/` | Typed env var loading, secrecy-wrapped secrets |
+| `src/db/mod.rs` | Postgres connection pool (PgPool), SQLx migrations |
+| `src/db/pgmq.rs` | pgmq queue operations (create, send, read, archive, delete) |
+| `src/db/work.rs` | Work item submit with structural dedup, pgmq integration |
+| `src/memory/store.rs` | pgvector storage, vector search, hybrid BM25+vector search |
+| `src/llm/mod.rs` | rig-core Anthropic provider factory |
+| `src/model/work.rs` | WorkItem, State, Provenance, Outcome, NewWorkItem |
+| `src/model/memory.rs` | MemoryEntry, NewMemory, MemoryFilters |
+| `src/telemetry/` | OTel init, GenAI span helpers, work span helpers |
 | `src/error.rs` | Error types |
 | `src/bin/animus.rs` | CLI binary (placeholder) |
-| `tests/engine_test.rs` | Integration tests covering lifecycle, dedup, retry, logs, events |
 
 ## Dependencies
 
-chrono 0.4, rusqlite 0.35 (bundled), serde 1, serde_json 1, thiserror 2, uuid 1
+sqlx 0.8, tokio 1, rig-core 0.31, opentelemetry 0.31, tracing 0.1, secrecy 0.10, chrono 0.4, serde 1, thiserror 2, uuid 1
 Edition 2024 — requires Rust 1.85+
 
-## Design Spec
+## Design Docs
 
-- Original spec: `~/src/witt3rd/animus/spec/bus_new.md`
-- `DESIGN.md` — adapted design doc (states, dedup, worker interface, storage)
+- `docs/db.md` — Database layer design (schema, API, deployment)
+- `DESIGN.md` — Original work engine design (states, dedup, worker interface)
+- `docs/plans/` — Implementation plans
 
 ## State Machine
 
@@ -50,10 +62,10 @@ Terminal: Completed, Dead, Merged
 
 ## Conventions
 
-- All state transitions go through `Engine` — never mutate storage directly from outside
-- `Storage` enforces valid state transitions via `State::can_transition_to()`
-- Events are recorded for every state change — dashboards subscribe to these
-- Logs are scoped to work items — no global log stream, no console streaming
-- Tests use `Engine::in_memory()` — no temp files, no cleanup
+- `Db` is the primary public API — all database operations go through it
+- State transitions enforced by `State::can_transition_to()`
+- Structural dedup on `(work_type, dedup_key)` — transactional
+- Secrets wrapped in `secrecy::SecretString`, never logged
+- OTel spans for LLM calls use GenAI semantic conventions
 - Pre-commit hook runs fmt + clippy + tests; don't bypass it
-- Minimal public surface: `Engine` is the only public API; all internals (`Storage`, `TxContext`) are `pub(crate)`. New modules default to `pub(crate)` unless explicitly needed by consumers (see Design Principle #5 in DESIGN.md)
+- Integration tests require Docker Postgres (`docker compose up -d`)
