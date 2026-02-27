@@ -4,55 +4,76 @@ Postgres-backed data layer for the Animus v2 AI persistence engine.
 
 ## What This Is
 
-animus-rs provides work queues, semantic memory, LLM abstraction, and observability for the Animus v2 system. It tracks work items through their lifecycle: submit, dedup, queue, claim, execute, complete. It provides structural deduplication, priority scheduling, retry with poison pill detection, and full observability via events and work-scoped logs.
+animus-rs provides the foundational data layer for Animus v2:
+
+- **Work queues** via [pgmq](https://github.com/tembo-io/pgmq) — submit, dedup, queue, claim, execute, complete
+- **Semantic memory** via [pgvector](https://github.com/pgvector/pgvector) — embedding storage, vector similarity search, hybrid BM25+vector
+- **LLM abstraction** via [rig-core](https://github.com/0xPlaygrounds/rig) — Anthropic provider
+- **Observability** via [OpenTelemetry](https://opentelemetry.io/) — GenAI semantic conventions for LLM calls
+
+All backed by Postgres. Fully async on tokio. SQLx for database access.
 
 ## Status
 
-**Early development.** Core engine works: submit, dedup, claim, start, complete, fail, retry, logs, events. Not yet built: worker trait, scheduling, circuit breaking, IPC, CLI.
+**Milestone 1 complete.** Data layer implemented: config, DB pool + migrations, pgmq queue operations, work items with structural dedup, semantic memory with hybrid search, OTel telemetry, LLM module. Not yet built: worker trait, scheduling, circuit breaking, IPC, CLI.
 
 ## Quick Start
 
+```bash
+# Start dev Postgres (pgmq + pgvector)
+docker compose up -d
+
+# Run unit tests
+cargo test
+
+# Run integration tests (requires Postgres)
+cargo test -- --ignored
+```
+
 ```rust
-use animus_rs::engine::Engine;
-use animus_rs::model::*;
+use animus_rs::db::Db;
+use animus_rs::model::work::NewWorkItem;
 
-let mut engine = Engine::in_memory()?;
+#[tokio::main]
+async fn main() -> animus_rs::error::Result<()> {
+    let db = Db::connect("postgres://animus:animus_dev@localhost:5432/animus_dev").await?;
+    db.migrate().await?;
+    db.create_queue("work").await?;
 
-// Submit work
-let result = engine.submit(
-    NewWorkItem::new("project-check", "heartbeat")
-        .dedup_key("project=garden")
-        .priority(5)
-        .params(serde_json::json!({"project": "garden"}))
-)?;
+    // Submit work with structural dedup
+    let result = db.submit_work(
+        NewWorkItem::new("engage", "heartbeat")
+            .dedup_key("person=kelly")
+            .params(serde_json::json!({"person": "kelly"}))
+    ).await?;
 
-// Claim and execute
-if let Some(item) = engine.claim("worker-1")? {
-    engine.start(item.id, "worker-1")?;
-    engine.log(item.id, LogLevel::Info, "checking project health")?;
-    engine.complete(item.id, Outcome {
-        success: true,
-        data: Some(serde_json::json!({"status": "healthy"})),
-        error: None,
-        duration_ms: 250,
-    })?;
+    // Read from queue
+    if let Some(msg) = db.read_from_queue("work", 30).await? {
+        // Process work...
+        db.archive_message("work", msg.msg_id).await?;
+    }
+
+    Ok(())
 }
 ```
 
 ## Development
 
 ```bash
-cargo test              # Run all tests
-cargo clippy            # Lint
+cargo test                        # Unit tests (no Postgres needed)
+cargo test -- --ignored           # Integration tests (needs Postgres)
+cargo clippy                      # Lint
+cargo build                       # Build library + CLI binary
+docker compose up -d              # Start dev Postgres
 ```
 
-Git hooks run tests and clippy on every commit (configured via `.githooks/`).
+Pre-commit hooks run `cargo fmt --check`, `cargo test`, and `cargo clippy -D warnings` (configured via `.githooks/`).
 
 ## Design
 
-See [DESIGN.md](DESIGN.md) for the full design spec. Key principles:
+See [DESIGN.md](DESIGN.md) for the full design spec and [docs/db.md](docs/db.md) for the database layer design. Key principles:
 
 1. **Work has identity** — structural dedup keys prevent the same work from executing twice
 2. **Work, not messages** — no from/to routing; the engine schedules work to workers
 3. **Dynamic workers** — spin up on demand, not fixed processes polling queues
-4. **Observability** — events (engine voice) + logs (worker voice), both queryable
+4. **Observability** — OpenTelemetry spans with GenAI semantic conventions
