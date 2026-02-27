@@ -135,44 +135,50 @@ impl Engine {
 
     /// Claim the next queued work item for a worker. Returns None if queue is empty.
     pub fn claim(&mut self, worker_id: &str) -> Result<Option<WorkItem>> {
-        let Some(item) = self.storage.claim_next()? else {
-            return Ok(None);
-        };
+        self.storage.with_transaction(|ctx| {
+            let Some(item) = ctx.claim_next()? else {
+                return Ok(None);
+            };
 
-        self.storage.update_state(item.id, State::Claimed)?;
+            ctx.update_state(item.id, State::Claimed)?;
 
-        self.storage.record_event(EventKind::WorkClaimed {
-            id: item.id,
-            worker_id: worker_id.to_string(),
-        })?;
+            ctx.record_event(EventKind::WorkClaimed {
+                id: item.id,
+                worker_id: worker_id.to_string(),
+            })?;
 
-        self.storage.get_work_item(item.id).map(Some)
+            ctx.get_work_item(item.id).map(Some)
+        })
     }
 
     /// Mark a claimed work item as running.
     pub fn start(&mut self, id: WorkId, worker_id: &str) -> Result<()> {
-        self.storage.update_state(id, State::Running)?;
-        self.storage.increment_attempts(id)?;
+        self.storage.with_transaction(|ctx| {
+            ctx.update_state(id, State::Running)?;
+            ctx.increment_attempts(id)?;
 
-        self.storage.record_event(EventKind::WorkRunning {
-            id,
-            worker_id: worker_id.to_string(),
-        })?;
+            ctx.record_event(EventKind::WorkRunning {
+                id,
+                worker_id: worker_id.to_string(),
+            })?;
 
-        Ok(())
+            Ok(())
+        })
     }
 
     /// Mark a running work item as completed.
     pub fn complete(&mut self, id: WorkId, outcome: Outcome) -> Result<()> {
-        self.storage.set_outcome(id, &outcome)?;
-        self.storage.update_state(id, State::Completed)?;
+        self.storage.with_transaction(|ctx| {
+            ctx.set_outcome(id, &outcome)?;
+            ctx.update_state(id, State::Completed)?;
 
-        self.storage.record_event(EventKind::WorkCompleted {
-            id,
-            duration_ms: outcome.duration_ms,
-        })?;
+            ctx.record_event(EventKind::WorkCompleted {
+                id,
+                duration_ms: outcome.duration_ms,
+            })?;
 
-        Ok(())
+            Ok(())
+        })
     }
 
     /// Mark a running work item as failed. May be retried or go dead.
@@ -180,41 +186,42 @@ impl Engine {
     /// `start()` already incremented `attempts`, so we use the current
     /// value directly — no extra +1 here.
     pub fn fail(&mut self, id: WorkId, error: &str, retryable: bool) -> Result<()> {
-        let item = self.storage.get_work_item(id)?;
-        let max = item.max_attempts.unwrap_or(self.default_max_attempts);
-        let attempts = item.attempts; // Already incremented by start()
+        let default_max = self.default_max_attempts;
+        self.storage.with_transaction(|ctx| {
+            let item = ctx.get_work_item(id)?;
+            let max = item.max_attempts.unwrap_or(default_max);
+            let attempts = item.attempts;
 
-        self.storage.update_state(id, State::Failed)?;
+            ctx.update_state(id, State::Failed)?;
 
-        self.storage.record_event(EventKind::WorkFailed {
-            id,
-            error: error.to_string(),
-            retryable,
-            attempt: attempts,
-        })?;
-
-        if !retryable || attempts >= max {
-            // Go dead
-            self.storage.update_state(id, State::Dead)?;
-            self.storage.record_event(EventKind::WorkDead {
+            ctx.record_event(EventKind::WorkFailed {
                 id,
-                reason: if !retryable {
-                    format!("non-retryable failure: {error}")
-                } else {
-                    format!("exhausted {attempts}/{max} attempts: {error}")
-                },
-                attempts,
+                error: error.to_string(),
+                retryable,
+                attempt: attempts,
             })?;
-        } else {
-            // Re-queue for retry
-            self.storage.update_state(id, State::Queued)?;
-            self.storage.record_event(EventKind::WorkQueued {
-                id,
-                priority: item.priority,
-            })?;
-        }
 
-        Ok(())
+            if !retryable || attempts >= max {
+                ctx.update_state(id, State::Dead)?;
+                ctx.record_event(EventKind::WorkDead {
+                    id,
+                    reason: if !retryable {
+                        format!("non-retryable failure: {error}")
+                    } else {
+                        format!("exhausted {attempts}/{max} attempts: {error}")
+                    },
+                    attempts,
+                })?;
+            } else {
+                ctx.update_state(id, State::Queued)?;
+                ctx.record_event(EventKind::WorkQueued {
+                    id,
+                    priority: item.priority,
+                })?;
+            }
+
+            Ok(())
+        })
     }
 
     /// Append a log entry for a work item.

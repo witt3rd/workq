@@ -81,23 +81,11 @@ let completed_at = if new_state.is_terminal() {
 
 Added a `claim_next()` method to `Storage` that uses `SELECT ... WHERE state = 'queued' ORDER BY priority DESC, created_at ASC LIMIT 1`, hitting the existing `idx_queued` partial index. `Engine::claim()` now calls `claim_next()` instead of `list_by_state(State::Queued)`, avoiding loading and deserializing the entire queue.
 
-### 6. No transactions around multi-step operations in `engine.rs`
+### ~~6. No transactions around multi-step operations in `engine.rs`~~ ✓ FIXED
 
-**File:** `src/engine.rs`
+**Fixed in:** `witt3rd/fix-remaining-issues` branch
 
-**Partially addressed:** `submit()` is now transactional (see Issue #1 fix). The `TxContext` + `with_transaction` infrastructure is in place and reusable.
-
-**Remaining:** `complete()`, `fail()`, `start()`, and `claim()` still perform multiple storage operations without a transaction. For example, `fail()` does:
-
-1. `get_work_item(id)`
-2. `update_state(id, State::Failed)`
-3. `record_event(WorkFailed)`
-4. `update_state(id, State::Dead)` or `update_state(id, State::Queued)`
-5. `record_event(WorkDead)` or `record_event(WorkQueued)`
-
-If the process crashes between steps 2 and 4, the item is stuck in `Failed` with no path forward -- it is not `Dead` and not `Queued`. The `Failed -> Failed` transition is not in `can_transition_to()`, so manual intervention is required.
-
-**Recommendation:** Wrap these methods using the existing `storage.with_transaction()` pattern. This is especially important for `fail()`.
+All engine operations that perform multiple storage calls (`claim()`, `start()`, `complete()`, `fail()`) now run within `storage.with_transaction()`. The `TxContext` struct gained three new delegating methods: `claim_next()`, `increment_attempts()`, and `set_outcome()`, backed by corresponding `_on()` inner functions. This ensures crash safety — particularly for `fail()`, which performs up to 5 storage operations and previously could leave items stuck in the `Failed` state with no forward path.
 
 ### ~~7. `event_seq` in `Storage` can diverge from the database~~ ✓ FIXED
 
@@ -105,17 +93,11 @@ If the process crashes between steps 2 and 4, the item is stuck in `Failed` with
 
 Removed the in-memory `event_seq` field from `Storage` and `TxContext`. Event sequence numbers are now assigned by SQLite's `AUTOINCREMENT` and read back via `last_insert_rowid()`. The `with_transaction` snapshot/restore logic was also simplified since there's no in-memory counter to manage.
 
-### 8. `outcome_ms` cast from `u64` to `i64` can overflow
+### ~~8. `outcome_ms` cast from `u64` to `i64` can overflow~~ ✓ FIXED
 
-**File:** `src/storage.rs:289`
+**Fixed in:** `witt3rd/fix-remaining-issues` branch (folded into Issue #6)
 
-```rust
-outcome.duration_ms as i64,
-```
-
-If `duration_ms` exceeds `i64::MAX` (unlikely but possible for extremely long-running work), this silently wraps to a negative value. Since this is a library, defensive coding matters.
-
-**Recommendation:** Use `i64::try_from(outcome.duration_ms).unwrap_or(i64::MAX)` or store as `u64` text.
+The `set_outcome_on()` inner function now uses `i64::try_from(outcome.duration_ms).unwrap_or(i64::MAX)` instead of `outcome.duration_ms as i64`, preventing silent wrapping to negative values for extremely long durations.
 
 ### 9. `Storage` fields and methods are `pub` -- breaks encapsulation
 
@@ -131,22 +113,11 @@ s.update_state(id, State::Completed)?; // bypasses Engine
 
 **Recommendation:** Make `Storage` `pub(crate)` and its methods `pub(crate)`. Only `Engine` should be the public API surface.
 
-### 10. `row_to_work_item` uses positional column indexes -- fragile
+### ~~10. `row_to_work_item` uses positional column indexes -- fragile~~ ✓ FIXED
 
-**File:** `src/storage.rs:398-437`
+**Fixed in:** `witt3rd/fix-remaining-issues` branch
 
-```rust
-fn row_to_work_item(row: &rusqlite::Row) -> std::result::Result<WorkItem, String> {
-    let id_str: String = row.get(0).map_err(|e| e.to_string())?;
-    let params_str: String = row.get(5).map_err(|e| e.to_string())?;
-    let state_str: String = row.get(7).map_err(|e| e.to_string())?;
-    // ...
-    let created_str: String = row.get(15).map_err(|e| e.to_string())?;
-```
-
-This uses `SELECT *` combined with hardcoded column indexes (0, 5, 7, 15, 16, 17). If anyone adds or reorders a column in the schema, every index silently shifts and produces incorrect data or panics. This is the most dangerous pattern in SQL row mapping.
-
-**Recommendation:** Either (a) use `SELECT id, work_type, dedup_key, ...` with explicit columns and keep the positional indexes matching, or (b) use named column access: `row.get::<_, String>("id")`. Option (b) is rusqlite-idiomatic and self-documenting.
+Replaced all `row.get(N)` positional index calls with `row.get::<_, Type>("column_name")` named column access. Adding or reordering columns in the schema no longer silently shifts index mappings. Queries continue to use `SELECT *` — named access is orthogonal to column list style.
 
 ---
 
