@@ -104,7 +104,7 @@ impl Storage {
                 outcome_ms      INTEGER,
                 created_at      TEXT NOT NULL,
                 updated_at      TEXT NOT NULL,
-                completed_at    TEXT
+                resolved_at     TEXT
             );
 
             CREATE INDEX IF NOT EXISTS idx_work_type ON work_items(work_type);
@@ -375,15 +375,15 @@ fn update_state_on(conn: &Connection, id: WorkId, new_state: State) -> Result<St
     }
 
     let now = Utc::now().to_rfc3339();
-    let completed_at = if new_state.is_terminal() {
+    let resolved_at = if new_state.is_terminal() {
         Some(now.clone())
     } else {
         None
     };
 
     conn.execute(
-        "UPDATE work_items SET state = ?1, updated_at = ?2, completed_at = COALESCE(?3, completed_at) WHERE id = ?4",
-        params![new_state.to_string(), now, completed_at, id.0.to_string()],
+        "UPDATE work_items SET state = ?1, updated_at = ?2, resolved_at = COALESCE(?3, resolved_at) WHERE id = ?4",
+        params![new_state.to_string(), now, resolved_at, id.0.to_string()],
     )?;
 
     Ok(old_state)
@@ -445,7 +445,7 @@ fn merge_work_item_on(conn: &Connection, id: WorkId, canonical_id: WorkId) -> Re
     // Update the merged item
     let now = Utc::now().to_rfc3339();
     conn.execute(
-        "UPDATE work_items SET state = ?1, merged_into = ?2, updated_at = ?3, completed_at = ?3 WHERE id = ?4",
+        "UPDATE work_items SET state = ?1, merged_into = ?2, updated_at = ?3, resolved_at = ?3 WHERE id = ?4",
         params![State::Merged.to_string(), canonical_id.0.to_string(), now, id.0.to_string()],
     )?;
 
@@ -537,8 +537,8 @@ fn row_to_work_item(row: &rusqlite::Row) -> std::result::Result<WorkItem, String
     let updated_str: String = row
         .get::<_, String>("updated_at")
         .map_err(|e| e.to_string())?;
-    let completed_str: Option<String> = row
-        .get::<_, Option<String>>("completed_at")
+    let resolved_str: Option<String> = row
+        .get::<_, Option<String>>("resolved_at")
         .map_err(|e| e.to_string())?;
 
     Ok(WorkItem {
@@ -576,7 +576,7 @@ fn row_to_work_item(row: &rusqlite::Row) -> std::result::Result<WorkItem, String
         updated_at: updated_str
             .parse()
             .map_err(|_| "invalid updated_at".to_string())?,
-        completed_at: completed_str.and_then(|s| s.parse().ok()),
+        resolved_at: resolved_str.and_then(|s| s.parse().ok()),
     })
 }
 
