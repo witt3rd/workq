@@ -20,6 +20,10 @@ metrics_generator:
       - url: http://prometheus:9090/api/v1/write
         send_exemplars: true
 
+compactor:
+  compaction:
+    block_retention: 720h  # 30 days
+
 storage:
   trace:
     backend: local

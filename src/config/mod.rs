@@ -11,7 +11,8 @@ use secrecy::SecretString;
 #[derive(Debug)]
 pub struct Config {
     pub database_url: SecretString,
-    pub anthropic_api_key: SecretString,
+    /// Anthropic API key — optional until a faculty actually needs LLM access.
+    pub anthropic_api_key: Option<SecretString>,
     pub otel_endpoint: Option<String>,
     pub log_level: String,
 }
@@ -24,7 +25,9 @@ impl Config {
     pub fn from_env() -> Result<Self> {
         Ok(Self {
             database_url: SecretString::from(required_var("DATABASE_URL")?),
-            anthropic_api_key: SecretString::from(required_var("ANTHROPIC_API_KEY")?),
+            anthropic_api_key: std::env::var("ANTHROPIC_API_KEY")
+                .ok()
+                .map(SecretString::from),
             otel_endpoint: std::env::var("OTEL_ENDPOINT").ok(),
             log_level: std::env::var("LOG_LEVEL").unwrap_or_else(|_| "info".to_string()),
         })

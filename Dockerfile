@@ -32,4 +32,5 @@ RUN groupadd -r animus && useradd -r -g animus animus
 COPY --from=builder /app/target/release/animus /usr/local/bin/animus
 
 USER animus
+WORKDIR /
 ENTRYPOINT ["animus"]

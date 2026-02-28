@@ -6,10 +6,12 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+    env_file:
+      - path: .env
+        required: false
     environment:
       DATABASE_URL: postgres://animus:animus_dev@postgres:5432/animus_dev
-      OTEL_ENDPOINT: http://otel-collector:4317
-      # ANTHROPIC_API_KEY: pass at runtime or via .env
+      OTEL_ENDPOINT: ${OTEL_ENDPOINT:-http://otel-collector:4317}
     volumes:
       - ./faculties:/faculties
       - ./fixtures/scripts:/scripts
@@ -56,6 +58,8 @@ services:
     command:
       - "--config.file=/etc/prometheus/prometheus.yml"
       - "--web.enable-remote-write-receiver"
+      - "--web.enable-admin-api"
+      - "--storage.tsdb.retention.time=30d"
     volumes:
       - ./docker/prometheus.yml:/etc/prometheus/prometheus.yml
       - prometheus-data:/prometheus
