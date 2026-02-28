@@ -1,0 +1,17 @@
+[faculty]
+name = "transform"
+accepts = ["transform"]
+max_concurrent = 2
+
+[faculty.orient]
+command = "fixtures/scripts/orient.sh"
+
+[faculty.engage]
+command = "fixtures/scripts/engage.sh"
+
+[faculty.consolidate]
+command = "fixtures/scripts/consolidate.sh"
+
+[faculty.recover]
+command = "fixtures/scripts/recover.sh"
+max_attempts = 3

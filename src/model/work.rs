@@ -53,6 +53,9 @@ pub struct WorkItem {
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
     pub resolved_at: Option<DateTime<Utc>>,
+
+    /// Result of execution, populated on completion or failure.
+    pub outcome: Option<Outcome>,
 }
 
 /// Newtype for work item IDs.

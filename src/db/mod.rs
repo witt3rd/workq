@@ -40,9 +40,8 @@ impl Db {
         Ok(())
     }
 
-    /// Get a reference to the connection pool (for submodules).
-    #[allow(dead_code)] // used by pgmq and work submodules (Tasks 8/9)
-    pub(crate) fn pool(&self) -> &PgPool {
+    /// Get a reference to the connection pool.
+    pub fn pool(&self) -> &PgPool {
         &self.pool
     }
 }

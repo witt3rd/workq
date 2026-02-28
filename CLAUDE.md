@@ -4,7 +4,7 @@
 
 animus-rs is the substrate for relational beings — the machinery that lets an animus exist, persist, and become. Each animus is a self-contained appliance: data plane (Postgres-backed work queues and semantic memory), control plane (queue watching, resource gating, focus spawning), faculties (pluggable cognitive specializations), LLM abstraction, and observability.
 
-Each animus is a self-contained appliance — one `docker compose up` starts a complete agent with integrated observability. Milestone 1 (current) implements the data plane and observability:
+Each animus is a self-contained appliance — one `docker compose up` starts a complete agent with integrated observability. Milestone 2 (current) adds the control plane and faculty system on top of the data plane:
 - **Work queues** via pgmq (Postgres extension)
 - **Semantic memory** via pgvector (embedding search + hybrid BM25+vector)
 - **LLM abstraction** via rig-core (Anthropic provider)
@@ -24,6 +24,7 @@ docker compose up animus postgres -d  # Core services only (no observability)
 docker compose build animus       # Rebuild animus image
 docker compose -f docker-compose.observer.yml up -d  # Standalone observer stack (fleet)
 cargo test --test telemetry_smoke_test -- --ignored   # Smoke tests (requires docker stack)
+cargo test --test faculty_test -- --ignored --nocapture  # Faculty end-to-end test
 ```
 
 Pre-commit hook (`.githooks/pre-commit`) runs `cargo fmt --check`, `cargo test`, and `cargo clippy -D warnings`.
@@ -44,8 +45,12 @@ Pre-commit hook (`.githooks/pre-commit`) runs `cargo fmt --check`, `cargo test`,
 | `src/telemetry/metrics.rs` | Metric instrument factories (counters, histograms) |
 | `src/telemetry/genai.rs` | GenAI semantic convention span helpers |
 | `src/telemetry/work.rs` | Work execution span helpers |
+| `src/faculty/mod.rs` | Faculty config (TOML), hook definitions, registry by work type |
+| `src/engine/mod.rs` | Control plane re-exports |
+| `src/engine/focus.rs` | Focus lifecycle: dir creation, hook pipeline, outcome reading |
+| `src/engine/control.rs` | ControlPlane loop: PgListener, route to faculty, spawn focus, retire work |
 | `src/error.rs` | Error types |
-| `src/bin/animus.rs` | CLI binary (placeholder) |
+| `src/bin/animus.rs` | Control plane daemon (connects DB, loads faculties, runs engine) |
 | `Dockerfile` | Multi-stage Rust build (builder + slim runtime) |
 | `docker-compose.yml` | Full appliance: animus + Postgres + observability |
 | `docker-compose.observer.yml` | Standalone observer stack for fleet use |

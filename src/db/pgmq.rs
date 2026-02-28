@@ -4,6 +4,8 @@
 //! pgmq.archive, pgmq.delete.
 
 use crate::error::Result;
+use crate::telemetry::metrics;
+use opentelemetry::KeyValue;
 
 /// A message read from a pgmq queue.
 #[derive(Debug, Clone)]
@@ -22,6 +24,13 @@ impl super::Db {
             .bind(queue_name)
             .execute(&self.pool)
             .await?;
+        metrics::queue_operations().add(
+            1,
+            &[
+                KeyValue::new("queue", queue_name.to_string()),
+                KeyValue::new("operation", "create"),
+            ],
+        );
         Ok(())
     }
 
@@ -39,6 +48,13 @@ impl super::Db {
             .bind(delay_seconds)
             .fetch_one(&self.pool)
             .await?;
+        metrics::queue_operations().add(
+            1,
+            &[
+                KeyValue::new("queue", queue_name.to_string()),
+                KeyValue::new("operation", "send"),
+            ],
+        );
         Ok(row.0)
     }
 
@@ -66,15 +82,26 @@ impl super::Db {
         .fetch_optional(&self.pool)
         .await?;
 
-        Ok(
-            row.map(|(msg_id, read_ct, enqueued_at, vt, message)| PgmqMessage {
-                msg_id,
-                read_ct,
-                enqueued_at,
-                vt,
-                message,
-            }),
-        )
+        let msg = row.map(|(msg_id, read_ct, enqueued_at, vt, message)| PgmqMessage {
+            msg_id,
+            read_ct,
+            enqueued_at,
+            vt,
+            message,
+        });
+
+        metrics::queue_operations().add(
+            1,
+            &[
+                KeyValue::new("queue", queue_name.to_string()),
+                KeyValue::new(
+                    "operation",
+                    if msg.is_some() { "read" } else { "read_empty" },
+                ),
+            ],
+        );
+
+        Ok(msg)
     }
 
     /// Archive a message (moves to archive table, preserves for audit).
@@ -84,6 +111,13 @@ impl super::Db {
             .bind(msg_id)
             .execute(&self.pool)
             .await?;
+        metrics::queue_operations().add(
+            1,
+            &[
+                KeyValue::new("queue", queue_name.to_string()),
+                KeyValue::new("operation", "archive"),
+            ],
+        );
         Ok(())
     }
 
@@ -94,6 +128,13 @@ impl super::Db {
             .bind(msg_id)
             .execute(&self.pool)
             .await?;
+        metrics::queue_operations().add(
+            1,
+            &[
+                KeyValue::new("queue", queue_name.to_string()),
+                KeyValue::new("operation", "delete"),
+            ],
+        );
         Ok(())
     }
 }

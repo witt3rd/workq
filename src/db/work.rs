@@ -2,13 +2,15 @@
 
 use crate::error::{Error, Result};
 use crate::model::work::*;
+use crate::telemetry::metrics;
+use opentelemetry::KeyValue;
 use uuid::Uuid;
 
 /// Result of submitting work.
 #[derive(Debug)]
 pub enum SubmitResult {
     /// New work item was created and queued.
-    Created(WorkItem),
+    Created(Box<WorkItem>),
     /// Duplicate detected, merged into existing item.
     Merged {
         new_id: WorkId,
@@ -96,6 +98,13 @@ impl super::Db {
                 .await?;
 
                 tx.commit().await?;
+                metrics::work_submitted().add(
+                    1,
+                    &[
+                        KeyValue::new("work_type", new.work_type.clone()),
+                        KeyValue::new("result", "duplicate"),
+                    ],
+                );
                 return Ok(SubmitResult::Merged {
                     new_id: WorkId(id),
                     canonical_id: WorkId(canonical.0),
@@ -145,16 +154,30 @@ impl super::Db {
         .execute(&mut *tx)
         .await?;
 
+        // NOTIFY is transactional — only fires on commit
+        sqlx::query("SELECT pg_notify('work_ready', $1)")
+            .bind(&new.work_type)
+            .execute(&mut *tx)
+            .await?;
+
         tx.commit().await?;
 
+        metrics::work_submitted().add(
+            1,
+            &[
+                KeyValue::new("work_type", new.work_type),
+                KeyValue::new("result", "ok"),
+            ],
+        );
+
         let item = self.get_work_item(WorkId(id)).await?;
-        Ok(SubmitResult::Created(item))
+        Ok(SubmitResult::Created(Box::new(item)))
     }
 
     /// Get a work item by ID.
     pub async fn get_work_item(&self, id: WorkId) -> Result<WorkItem> {
         let row: Option<WorkItemRow> = sqlx::query_as(
-            "SELECT id, work_type, dedup_key, source, trigger_info, params, priority, state, merged_into, parent_id, attempts, max_attempts, created_at, updated_at, resolved_at
+            "SELECT id, work_type, dedup_key, source, trigger_info, params, priority, state, merged_into, parent_id, attempts, max_attempts, created_at, updated_at, resolved_at, outcome_data, outcome_error, outcome_ms
              FROM work_items WHERE id = $1",
         )
         .bind(id.0)
@@ -163,6 +186,127 @@ impl super::Db {
 
         row.ok_or_else(|| Error::NotFound(format!("work item {id}")))?
             .try_into_work_item()
+    }
+
+    /// Transition a work item's state with optimistic concurrency.
+    pub async fn transition_state(&self, id: WorkId, from: State, to: State) -> Result<WorkItem> {
+        validate_transition(from, to)?;
+
+        let now = chrono::Utc::now();
+        let resolved_at = if to.is_terminal() { Some(now) } else { None };
+
+        // Increment attempts when entering Running
+        let attempts_increment = if to == State::Running { 1 } else { 0 };
+
+        let rows_affected = sqlx::query(
+            "UPDATE work_items SET state = $1, updated_at = $2, resolved_at = COALESCE($3, resolved_at), attempts = attempts + $4
+             WHERE id = $5 AND state = $6",
+        )
+        .bind(to.to_string())
+        .bind(now)
+        .bind(resolved_at)
+        .bind(attempts_increment)
+        .bind(id.0)
+        .bind(from.to_string())
+        .execute(&self.pool)
+        .await?
+        .rows_affected();
+
+        if rows_affected == 0 {
+            return Err(Error::InvalidTransition {
+                from: from.to_string(),
+                to: to.to_string(),
+            });
+        }
+
+        metrics::work_state_transitions().add(
+            1,
+            &[
+                KeyValue::new("from", from.to_string()),
+                KeyValue::new("to", to.to_string()),
+            ],
+        );
+
+        self.get_work_item(id).await
+    }
+
+    /// Complete a work item: Running → Completed with outcome data.
+    pub async fn complete_work(&self, id: WorkId, outcome: Outcome) -> Result<WorkItem> {
+        validate_transition(State::Running, State::Completed)?;
+
+        let now = chrono::Utc::now();
+        let rows_affected = sqlx::query(
+            "UPDATE work_items SET state = 'completed', updated_at = $1, resolved_at = $1, outcome_data = $2, outcome_error = $3, outcome_ms = $4
+             WHERE id = $5 AND state = 'running'",
+        )
+        .bind(now)
+        .bind(&outcome.data)
+        .bind(&outcome.error)
+        .bind(outcome.duration_ms as i64)
+        .bind(id.0)
+        .execute(&self.pool)
+        .await?
+        .rows_affected();
+
+        if rows_affected == 0 {
+            return Err(Error::InvalidTransition {
+                from: "running".to_string(),
+                to: "completed".to_string(),
+            });
+        }
+
+        metrics::work_state_transitions().add(
+            1,
+            &[
+                KeyValue::new("from", "running"),
+                KeyValue::new("to", "completed"),
+            ],
+        );
+        metrics::operation_duration_ms().record(
+            outcome.duration_ms as f64,
+            &[KeyValue::new("operation", "work.execute")],
+        );
+
+        self.get_work_item(id).await
+    }
+
+    /// Fail a work item: Running → Failed with error info.
+    pub async fn fail_work(&self, id: WorkId, error: &str, duration_ms: u64) -> Result<WorkItem> {
+        validate_transition(State::Running, State::Failed)?;
+
+        let now = chrono::Utc::now();
+        let rows_affected = sqlx::query(
+            "UPDATE work_items SET state = 'failed', updated_at = $1, outcome_error = $2, outcome_ms = $3
+             WHERE id = $4 AND state = 'running'",
+        )
+        .bind(now)
+        .bind(error)
+        .bind(duration_ms as i64)
+        .bind(id.0)
+        .execute(&self.pool)
+        .await?
+        .rows_affected();
+
+        if rows_affected == 0 {
+            return Err(Error::InvalidTransition {
+                from: "running".to_string(),
+                to: "failed".to_string(),
+            });
+        }
+
+        metrics::work_state_transitions().add(
+            1,
+            &[
+                KeyValue::new("from", "running"),
+                KeyValue::new("to", "failed"),
+            ],
+        );
+        metrics::operation_duration_ms().record(
+            duration_ms as f64,
+            &[KeyValue::new("operation", "work.execute")],
+        );
+
+        self.get_work_item(id).await
     }
 }
 
@@ -184,10 +328,24 @@ struct WorkItemRow {
     created_at: chrono::DateTime<chrono::Utc>,
     updated_at: chrono::DateTime<chrono::Utc>,
     resolved_at: Option<chrono::DateTime<chrono::Utc>>,
+    outcome_data: Option<serde_json::Value>,
+    outcome_error: Option<String>,
+    outcome_ms: Option<i64>,
 }
 
 impl WorkItemRow {
     fn try_into_work_item(self) -> Result<WorkItem> {
+        let outcome = if self.outcome_data.is_some() || self.outcome_error.is_some() {
+            Some(Outcome {
+                success: self.outcome_error.is_none(),
+                data: self.outcome_data,
+                error: self.outcome_error,
+                duration_ms: self.outcome_ms.unwrap_or(0) as u64,
+            })
+        } else {
+            None
+        };
+
         Ok(WorkItem {
             id: WorkId(self.id),
             work_type: self.work_type,
@@ -206,6 +364,7 @@ impl WorkItemRow {
             created_at: self.created_at,
             updated_at: self.updated_at,
             resolved_at: self.resolved_at,
+            outcome,
         })
     }
 }

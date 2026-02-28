@@ -3,6 +3,8 @@
 use crate::db::Db;
 use crate::error::Result;
 use crate::model::memory::*;
+use crate::telemetry::metrics;
+use opentelemetry::KeyValue;
 
 impl Db {
     /// Store a new memory with its embedding vector.
@@ -19,6 +21,7 @@ impl Db {
         .bind(format_vector(&new.embedding))
         .fetch_one(self.pool())
         .await?;
+        metrics::memory_operations().add(1, &[KeyValue::new("operation", "store")]);
         Ok(row.0)
     }
 
@@ -47,6 +50,7 @@ impl Db {
         .fetch_all(self.pool())
         .await?;
 
+        metrics::memory_operations().add(1, &[KeyValue::new("operation", "vector_search")]);
         Ok(rows.into_iter().map(MemoryEntry::from).collect())
     }
 
@@ -80,6 +84,7 @@ impl Db {
         .fetch_all(self.pool())
         .await?;
 
+        metrics::memory_operations().add(1, &[KeyValue::new("operation", "hybrid_search")]);
         Ok(rows.into_iter().map(MemoryEntry::from).collect())
     }
 }

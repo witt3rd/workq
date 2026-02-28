@@ -10,7 +10,10 @@ services:
       DATABASE_URL: postgres://animus:animus_dev@postgres:5432/animus_dev
       OTEL_ENDPOINT: http://otel-collector:4317
       # ANTHROPIC_API_KEY: pass at runtime or via .env
-    restart: on-failure
+    volumes:
+      - ./faculties:/faculties
+      - ./fixtures/scripts:/scripts
+    restart: unless-stopped
 
   postgres:
     build: ./docker

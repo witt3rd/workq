@@ -215,37 +215,125 @@ See [docs/db.md](docs/db.md) for the full schema, API surface, and deployment de
 
 ## Faculty / Focus Model (Future)
 
-A **faculty** defines a cognitive specialization. The host registers faculties; the control plane activates them via **foci** (subprocess instances) when matching work arrives.
+A **faculty** is a cognitive specialization — Social, Initiative, Heartbeat, Radiate, Computer Use, or domain-specific. A **focus** is a single activation of a faculty on a specific work item.
 
-```rust
-trait Faculty {
-    fn name(&self) -> &str;
-    fn accepts(&self, work_type: &str) -> bool;
-    fn resources(&self, work_type: &str) -> ResourceClaim;
+Faculties are **configuration, not code**. The animus-rs engine is the runtime; faculties are data that tell the engine what to do. Adding a faculty means adding a config file, not writing Rust.
 
-    // Lifecycle hooks (Orient / Engage / Consolidate / Recover)
-    async fn orient(&self, item: &WorkItem) -> OrientResult;
-    async fn engage(&self, item: &WorkItem, context: OrientResult) -> WorkOutcome;
-    async fn consolidate(&self, item: &WorkItem, outcome: &WorkOutcome);
-    async fn recover(&self, item: &WorkItem, error: &FocusError) -> RecoverAction;
-}
+### Faculty Configuration
 
-enum WorkOutcome {
-    Success { result: Value },
-    Failure { error: String, retryable: bool },
-    Spawn { children: Vec<NewWorkItem>, continuation: Option<Continuation> },
-}
+Each faculty is defined in TOML. The engine loads all faculty configs at startup and builds a registry.
 
-enum RecoverAction {
-    Requeue,       // try again
-    Dead,          // unrecoverable
-}
+```toml
+[faculty]
+name = "social"
+accepts = ["engage", "respond", "check-in"]
+max_concurrent = 3
+
+[faculty.orient]
+command = "scripts/social-orient"
+
+[faculty.engage]
+model = "claude-sonnet-4-5-20250514"
+system_prompt_file = "prompts/social.md"
+tools = ["memory-search", "calendar", "send-message"]
+max_turns = 50
+
+[faculty.consolidate]
+command = "scripts/social-consolidate"
+
+[faculty.recover]
+command = "scripts/recover-default"
+max_attempts = 3
+backoff = "exponential"
 ```
 
-The control plane doesn't steer foci — once spawned, a focus is self-directed. The system cares about:
+### Hook Commands
+
+Hooks are **external processes** — any executable the OS can run. The engine doesn't care about the implementation language:
+
+- Shell scripts (`bash`, `zsh`)
+- Python (`python`, `uv run`, `uvx`)
+- Node/TypeScript (`node`, `npx`, `tsx`)
+- Compiled binaries (Rust, C, Go, whatever)
+
+The engine needs a path to an executable. That's it. The command is spawned as a subprocess via `tokio::process::Command`.
+
+**What the engine provides to hooks:** The engine writes a focus context file (JSON) to a known location before invoking each hook. This contains the work item, faculty config, and any state from prior phases. The hook reads what it needs, does its work, and writes its output to a known location. Decoupled — no IPC protocol, no stdin/stdout framing, just files.
+
+```
+/tmp/animus/foci/{focus-id}/
+  context.json      # engine writes: work item, faculty config, phase
+  orient-out.json   # orient hook writes its output here
+  engage-out.json   # engage phase writes outcome here
+  consolidate-out.json  # consolidate hook writes here
+```
+
+**Open question:** What arguments, if any, do hooks need beyond the context file path? Options:
+- **Minimal:** just the path to the focus directory. Hook reads `context.json` for everything.
+- **Convenience args:** path + work type + work item ID as positional args, for hooks that want to dispatch without parsing JSON.
+- **Environment variables:** `ANIMUS_FOCUS_DIR`, `ANIMUS_WORK_TYPE`, `ANIMUS_WORK_ID` — available to all hooks, no argument parsing needed.
+
+These aren't mutually exclusive. The engine can provide all three and hooks use whichever is convenient.
+
+### Focus Lifecycle
+
+When a work item is ready and the faculty has capacity, the control plane spawns a **focus** (subprocess). The focus runs through four phases:
+
+```
+Orient → Engage → Consolidate
+                      ↓ (on failure at any phase)
+                   Recover → Requeue or Dead
+```
+
+1. **Orient** — prepare context for the agentic loop. The orient hook gathers relevant memories, prior conversation state, external context — whatever the faculty needs. Output goes to the focus directory for the engage phase to pick up.
+
+2. **Engage** — the agentic loop. The engine drives an LLM conversation: system prompt (from faculty config), tools (from faculty config), context (from orient output). The loop runs until the agent self-terminates or hits `max_turns`.
+
+3. **Consolidate** — integrate results back into the substrate. The consolidate hook reads the engage output and does post-processing: store new memories, update relationship state, emit follow-up work items, whatever the faculty needs.
+
+4. **Recover** — on failure at any phase. The recover hook assesses what went wrong and decides: requeue (try again) or dead-letter (unrecoverable). Recovery can also do cleanup — release resources, log diagnostics, notify.
+
+The control plane doesn't steer foci — once spawned, a focus is self-directed. The engine cares about:
 - Did it succeed or fail?
 - How long did it take?
 - Did it spawn child work?
+
+### Rust Data Model
+
+Faculty is a struct deserialized from config, not a trait:
+
+```rust
+struct Faculty {
+    name: String,
+    accepts: Vec<String>,
+    max_concurrent: usize,
+    orient: HookConfig,
+    engage: EngageConfig,
+    consolidate: HookConfig,
+    recover: RecoverConfig,
+}
+
+struct HookConfig {
+    command: PathBuf,  // path to executable
+}
+
+struct EngageConfig {
+    model: String,
+    system_prompt_file: PathBuf,
+    tools: Vec<String>,
+    max_turns: usize,
+}
+
+struct RecoverConfig {
+    command: PathBuf,
+    max_attempts: u32,
+    backoff: BackoffStrategy,
+}
+
+struct FacultyRegistry {
+    faculties: HashMap<String, Faculty>,
+}
+```
 
 ## Deployment
 
@@ -349,23 +437,27 @@ See [docs/db.md](docs/db.md) for the full schema and API surface.
 - `animus serve` daemon mode
 
 ### Not Yet Implemented (Milestones 3+: Control Plane, Faculties, CLI)
-- Faculty trait and focus lifecycle (Orient / Engage / Consolidate / Recover)
+- Faculty config loading (TOML → FacultyRegistry)
+- Focus lifecycle engine (Orient → Engage → Consolidate → Recover)
+- Hook subprocess spawning (tokio::process::Command)
+- Focus context directory and JSON protocol
+- Agentic loop driver (model, system prompt, tools, max turns)
 - Control plane: queue watching (async notify), resource gating, focus spawning
 - Capacity management (global + per-faculty limits)
 - Circuit breaking and backpressure
 - Semantic dedup
 - Dedup time window (recently-completed)
 - Child work spawning and continuations
-- IPC layer (Unix domain socket)
 - CLI commands (status, list, show, logs)
 - SQLx offline metadata for CI
 
 ## Open Design Questions
 
-- **Faculty interface**: trait-based or message-passing? In-process only or support child processes?
-- **IPC protocol**: JSON lines vs protobuf over Unix domain socket
+- **Hook argument passing**: minimal (just focus dir path), convenience positional args, env vars, or all three?
+- **Engage phase driver**: how does the engine drive the agentic loop? Subprocess wrapping an LLM CLI? In-process rig-core? Both as options?
+- **Focus context protocol**: what exactly goes in `context.json` and what do output files look like?
+- **Faculty config location**: single directory of TOML files? Embedded in a master config? Per-faculty directories with prompt files alongside?
 - **Semantic dedup**: embedding similarity threshold, when to invoke, cost control
 - **Priority formula**: system-provided age boost, or fully host-controlled?
-- **Configuration**: TOML for work type definitions (capacity, retry policy, priority)
 - **Child work**: how to express continuations that run when all children complete
 - **Embedding provider**: Anthropic doesn't support embeddings via rig-core; need a separate provider

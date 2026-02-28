@@ -10,7 +10,9 @@
 
 pub mod config;
 pub mod db;
+pub mod engine;
 pub mod error;
+pub mod faculty;
 pub mod llm;
 pub mod memory;
 pub mod model;
