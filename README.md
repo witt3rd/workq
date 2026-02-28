@@ -15,7 +15,7 @@ All backed by Postgres. Fully async on tokio. SQLx for database access.
 
 ## Status
 
-**Milestone 1 (data plane) complete.** Config, DB pool + migrations, pgmq queue operations, work items with structural dedup, semantic memory with hybrid search, OTel telemetry, LLM module. Next: worker trait, control plane scheduling, circuit breaking, domain center orchestration, IPC, CLI.
+**Milestone 1 (data plane) complete.** Config, DB pool + migrations, pgmq queue operations, work items with structural dedup, semantic memory with hybrid search, OTel telemetry, LLM module. Next: faculty trait, control plane (queue watching, focus spawning), circuit breaking, IPC, CLI.
 
 ## Quick Start
 

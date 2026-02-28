@@ -4,7 +4,7 @@
 
 ## Origin
 
-animus-rs started as `workq`, a standalone work-tracking engine. When we discovered pgmq (Postgres queue extension), it became clear that pgmq already provides the queue primitives workq was hand-rolling. The project pivoted: build the full Animus system as one well-structured Rust crate — data plane (work queues, semantic memory), control plane (scheduling, domain center orchestration), workers, and observability.
+animus-rs started as `workq`, a standalone work-tracking engine. When we discovered pgmq (Postgres queue extension), it became clear that pgmq already provides the queue primitives workq was hand-rolling. The project pivoted: build the full Animus system as one well-structured Rust crate — data plane (work queues, semantic memory), control plane (queue watching, resource gating, focus spawning), faculties (pluggable cognitive specializations), and observability.
 
 The predecessor system used filesystem-based storage (YAML task queues, markdown substrate, ChromaDB for vectors, JSONL logs). It worked but had real limitations: no structural dedup, no transactional guarantees, fragile file-based queues, a separate ChromaDB process. animus-rs replaces all of this with Postgres + extensions.
 
@@ -17,7 +17,7 @@ This is not request/reply. This is: **something needs doing**.
 | Message bus | Work engine |
 |-------------|-------------|
 | Task is a message between processes | Work item is a thing that needs doing |
-| Fixed processes poll their queues | Workers spin up on demand |
+| Fixed processes poll their queues | Foci spin up on demand |
 | Routing by queue name | Scheduling by work type and capacity |
 | No dedup — same work dispatched N ways | Work identity — same intent recognized and merged |
 
@@ -41,18 +41,27 @@ Work items don't have `from` or `to` fields. They have:
 
 The caller says "this work needs doing" and the system figures out how.
 
-### 3. Dynamic Workers, Not Fixed Processes
+### 3. Faculties and Foci, Not Fixed Processes
 
-Workers are ephemeral — they exist to do one unit of work, then they're done. The system manages:
-- **Global capacity** — total concurrent workers
-- **Per-type capacity** — e.g., max 3 LLM workers
+A **faculty** is a cognitive specialization — Social, Initiative, Heartbeat, Radiate, Computer Use, or domain-specific. Each faculty defines its own lifecycle hooks and agentic loop configuration.
+
+A **focus** is a single activation of a faculty on a specific work item. The control plane spawns a focus (subprocess) when work is ready and resources are available. Each focus runs through four phases:
+
+1. **Orient** — pre-hook: prepare context, gather what's needed
+2. **Engage** — agentic loop: reason, plan, use tools, iterate until self-termination
+3. **Consolidate** — post-hook: integrate results, clean up
+4. **Recover** — exception-hook: on failure, assess and stabilize (requeue or dead-letter)
+
+Foci are ephemeral — they exist to do one unit of work, then they're done. The control plane manages:
+- **Global capacity** — total concurrent foci
+- **Per-faculty capacity** — e.g., max 3 Social foci
 - **Backpressure** — queuing with priority ordering
-- **Circuit breaking** — exponential backoff on failing work types
+- **Circuit breaking** — exponential backoff on failing faculties
 - **Poison pill detection** — dead-lettering items that fail repeatedly
 
 ### 4. Work-Once Guarantee
 
-- A work item is **claimed** by exactly one worker (pgmq visibility timeout)
+- A work item is **claimed** by exactly one focus (pgmq visibility timeout)
 - **Duplicate** work is detected and merged (structural dedup, transactional)
 - Every work item either **completes**, **fails** (with retry), or goes **dead** — nothing disappears silently
 
@@ -85,9 +94,9 @@ Created → Dedup Check → Queued → Claimed → Running → Completed
 | State | Meaning |
 |-------|---------|
 | **Created** | Submitted, pending dedup check |
-| **Queued** | In pgmq, waiting for a worker |
-| **Claimed** | Worker assigned via pgmq read (visibility timeout) |
-| **Running** | Worker actively processing |
+| **Queued** | In pgmq, waiting for a focus to pick it up |
+| **Claimed** | Focus assigned via pgmq read (visibility timeout) |
+| **Running** | Focus actively processing |
 | **Completed** | Done successfully |
 | **Failed** | Execution error, may be retried |
 | **Dead** | Exhausted retries or poisoned — terminal |
@@ -98,10 +107,10 @@ Created → Dedup Check → Queued → Claimed → Running → Completed
 ```
 Created  → Queued       (passed dedup, sent to pgmq)
 Created  → Merged       (structural dedup hit)
-Queued   → Claimed      (worker assigned via pgmq.read)
+Queued   → Claimed      (focus assigned via pgmq.read)
 Queued   → Dead         (cancelled or circuit-broken)
-Claimed  → Running      (worker started)
-Claimed  → Queued       (worker failed to start, re-queue)
+Claimed  → Running      (focus started)
+Claimed  → Queued       (focus failed to start, re-queue)
 Running  → Completed    (success)
 Running  → Failed       (execution error)
 Failed   → Queued       (retry)
@@ -204,15 +213,21 @@ Both share the same `sqlx::PgPool`. Migrations managed by SQLx (`./migrations/`)
 
 See [docs/db.md](docs/db.md) for the full schema, API surface, and deployment details.
 
-## Worker Interface (Future)
+## Faculty / Focus Model (Future)
 
-Workers are provided by the host. The system defines the contract:
+A **faculty** defines a cognitive specialization. The host registers faculties; the control plane activates them via **foci** (subprocess instances) when matching work arrives.
 
 ```rust
-trait Worker {
-    async fn execute(&self, item: &WorkItem) -> WorkOutcome;
+trait Faculty {
+    fn name(&self) -> &str;
     fn accepts(&self, work_type: &str) -> bool;
     fn resources(&self, work_type: &str) -> ResourceClaim;
+
+    // Lifecycle hooks (Orient / Engage / Consolidate / Recover)
+    async fn orient(&self, item: &WorkItem) -> OrientResult;
+    async fn engage(&self, item: &WorkItem, context: OrientResult) -> WorkOutcome;
+    async fn consolidate(&self, item: &WorkItem, outcome: &WorkOutcome);
+    async fn recover(&self, item: &WorkItem, error: &FocusError) -> RecoverAction;
 }
 
 enum WorkOutcome {
@@ -220,9 +235,14 @@ enum WorkOutcome {
     Failure { error: String, retryable: bool },
     Spawn { children: Vec<NewWorkItem>, continuation: Option<Continuation> },
 }
+
+enum RecoverAction {
+    Requeue,       // try again
+    Dead,          // unrecoverable
+}
 ```
 
-The system doesn't care what the worker does. It cares about:
+The control plane doesn't steer foci — once spawned, a focus is self-directed. The system cares about:
 - Did it succeed or fail?
 - How long did it take?
 - Did it spawn child work?
@@ -328,10 +348,10 @@ See [docs/db.md](docs/db.md) for the full schema and API surface.
 - `docker-compose.observer.yml` for shared fleet observer
 - `animus serve` daemon mode
 
-### Not Yet Implemented (Milestones 3+: Control Plane, Workers, CLI)
-- Worker trait and worker pool
-- Control plane scheduling and domain center orchestration
-- Capacity management (global + per-type limits)
+### Not Yet Implemented (Milestones 3+: Control Plane, Faculties, CLI)
+- Faculty trait and focus lifecycle (Orient / Engage / Consolidate / Recover)
+- Control plane: queue watching (async notify), resource gating, focus spawning
+- Capacity management (global + per-faculty limits)
 - Circuit breaking and backpressure
 - Semantic dedup
 - Dedup time window (recently-completed)
@@ -342,7 +362,7 @@ See [docs/db.md](docs/db.md) for the full schema and API surface.
 
 ## Open Design Questions
 
-- **Worker interface**: trait-based or message-passing? In-process only or support child processes?
+- **Faculty interface**: trait-based or message-passing? In-process only or support child processes?
 - **IPC protocol**: JSON lines vs protobuf over Unix domain socket
 - **Semantic dedup**: embedding similarity threshold, when to invoke, cost control
 - **Priority formula**: system-provided age boost, or fully host-controlled?

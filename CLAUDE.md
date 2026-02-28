@@ -2,7 +2,7 @@
 
 ## What This Is
 
-animus-rs is the substrate for relational beings — the machinery that lets an animus exist, persist, and become. Each animus is a self-contained appliance: data plane (Postgres-backed work queues and semantic memory), control plane (work scheduling, domain center orchestration), LLM abstraction, and observability.
+animus-rs is the substrate for relational beings — the machinery that lets an animus exist, persist, and become. Each animus is a self-contained appliance: data plane (Postgres-backed work queues and semantic memory), control plane (queue watching, resource gating, focus spawning), faculties (pluggable cognitive specializations), LLM abstraction, and observability.
 
 Each animus is a self-contained appliance — one `docker compose up` starts a complete agent with integrated observability. Milestone 1 (current) implements the data plane and observability:
 - **Work queues** via pgmq (Postgres extension)
