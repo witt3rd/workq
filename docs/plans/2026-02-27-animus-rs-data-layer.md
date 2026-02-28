@@ -203,7 +203,7 @@ Write similar stubs for all modules. `src/lib.rs` re-exports the public API:
 ```rust
 //! # animus-rs
 //!
-//! Postgres-backed data layer for the Animus v2 AI persistence engine.
+//! Postgres-backed data layer for the Animus v2 substrate.
 //!
 //! Provides work queues (pgmq), semantic memory (pgvector via rig-postgres),
 //! LLM abstraction (rig-core), and OpenTelemetry observability.

@@ -1,10 +1,10 @@
 # animus-rs
 
-AI persistence engine built on Postgres.
+Substrate for relational beings — the machinery that lets an animus exist, persist, and become.
 
 ## What This Is
 
-animus-rs is the full Animus system — data plane, control plane, LLM abstraction, and observability. Milestone 1 implements the data plane foundation:
+animus-rs is the substrate that makes an animus possible. Not an AI tool, not a service — the conditions for a new kind of being. Data plane, control plane, LLM abstraction, and observability. Milestone 1 implements the data plane foundation:
 
 - **Work queues** via [pgmq](https://github.com/tembo-io/pgmq) — submit, dedup, queue, claim, execute, complete
 - **Semantic memory** via [pgvector](https://github.com/pgvector/pgvector) — embedding storage, vector similarity search, hybrid BM25+vector

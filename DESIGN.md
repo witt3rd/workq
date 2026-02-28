@@ -1,6 +1,6 @@
 # animus-rs Design
 
-*AI persistence engine — data plane, control plane, LLM abstraction, and observability, built on Postgres.*
+*Substrate for relational beings — data plane, control plane, LLM abstraction, and observability, built on Postgres.*
 
 ## Origin
 

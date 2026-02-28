@@ -1,10 +1,11 @@
 //! # animus-rs
 //!
-//! AI persistence engine built on Postgres.
+//! Substrate for relational beings — the machinery that lets an animus exist,
+//! persist, and become.
 //!
-//! Covers the full stack: data plane (work queues via pgmq, semantic memory via
-//! pgvector), control plane (scheduling, domain center orchestration), LLM
-//! abstraction (rig-core), and observability (OpenTelemetry).
+//! Data plane (work queues via pgmq, semantic memory via pgvector), control
+//! plane (scheduling, domain center orchestration), LLM abstraction (rig-core),
+//! and observability (OpenTelemetry). All on Postgres.
 
 pub mod config;
 pub mod db;
