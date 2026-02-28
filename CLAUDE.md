@@ -4,11 +4,11 @@
 
 animus-rs is an AI persistence engine covering the full stack: data plane (Postgres-backed work queues and semantic memory), control plane (work scheduling, domain center orchestration), LLM abstraction, and observability.
 
-Milestone 1 (current) implements the data plane foundation:
+Each animus is a self-contained appliance — one `docker compose up` starts a complete agent with integrated observability. Milestone 1 (current) implements the data plane and observability:
 - **Work queues** via pgmq (Postgres extension)
 - **Semantic memory** via pgvector (embedding search + hybrid BM25+vector)
 - **LLM abstraction** via rig-core (Anthropic provider)
-- **Observability** via OpenTelemetry with GenAI semantic conventions
+- **Observability** via OpenTelemetry (traces, metrics, logs) through OTel Collector to Tempo/Prometheus/Loki/Grafana
 
 Postgres-only. Fully async on tokio. SQLx for database access.
 
@@ -19,7 +19,11 @@ cargo test                        # Run unit tests (requires no Postgres)
 cargo test -- --ignored           # Run integration tests (requires Postgres)
 cargo clippy                      # Lint
 cargo build                       # Build library + CLI binary
-docker compose up -d              # Start dev Postgres (pgmq + pgvector)
+docker compose up -d              # Start full appliance (animus + Postgres + observability)
+docker compose up animus postgres -d  # Core services only (no observability)
+docker compose build animus       # Rebuild animus image
+docker compose -f docker-compose.observer.yml up -d  # Standalone observer stack (fleet)
+cargo test --test telemetry_smoke_test -- --ignored   # Smoke tests (requires docker stack)
 ```
 
 Pre-commit hook (`.githooks/pre-commit`) runs `cargo fmt --check`, `cargo test`, and `cargo clippy -D warnings`.
@@ -36,13 +40,20 @@ Pre-commit hook (`.githooks/pre-commit`) runs `cargo fmt --check`, `cargo test`,
 | `src/llm/mod.rs` | rig-core Anthropic provider factory |
 | `src/model/work.rs` | WorkItem, State, Provenance, Outcome, NewWorkItem |
 | `src/model/memory.rs` | MemoryEntry, NewMemory, MemoryFilters |
-| `src/telemetry/` | OTel init, GenAI span helpers, work span helpers |
+| `src/telemetry/mod.rs` | Three-signal OTel init (traces, metrics, logs), TelemetryGuard |
+| `src/telemetry/metrics.rs` | Metric instrument factories (counters, histograms) |
+| `src/telemetry/genai.rs` | GenAI semantic convention span helpers |
+| `src/telemetry/work.rs` | Work execution span helpers |
 | `src/error.rs` | Error types |
 | `src/bin/animus.rs` | CLI binary (placeholder) |
+| `Dockerfile` | Multi-stage Rust build (builder + slim runtime) |
+| `docker-compose.yml` | Full appliance: animus + Postgres + observability |
+| `docker-compose.observer.yml` | Standalone observer stack for fleet use |
 
 ## Dependencies
 
-sqlx 0.8, tokio 1, rig-core 0.31, opentelemetry 0.31, tracing 0.1, secrecy 0.10, chrono 0.4, serde 1, thiserror 2, uuid 1
+See `Cargo.toml` for versions. Key crates: sqlx, tokio, rig-core, opentelemetry (+ otlp, sdk, appender-tracing), tracing, secrecy, chrono, serde, uuid.
+
 Edition 2024 — requires Rust 1.85+
 
 ## Design Docs

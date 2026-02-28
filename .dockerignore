@@ -1,0 +1,29 @@
+# Build artifacts (GBs)
+target/
+
+# Version control
+.git/
+.gitignore
+.githooks/
+
+# Documentation & design
+*.md
+docs/
+LICENSE
+
+# Docker configs (don't nest in build context)
+Dockerfile
+docker-compose*.yml
+
+# Environment / secrets
+.env
+.env.*
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Test fixtures
+tests/

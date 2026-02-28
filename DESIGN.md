@@ -148,41 +148,49 @@ Currently implements Distinct and Merge. Supersede and Defer are future extensio
 
 ## Observability
 
-Observability uses OpenTelemetry with the GenAI semantic conventions for LLM operations, backed by the Grafana stack for storage and visualization.
+Observability is part of the product, not a dev convenience. Every animus ships with integrated observability — you can see what your agent is doing out of the box.
+
+The system emits all three OTel signal types (traces, metrics, logs) through a unified pipeline, using GenAI semantic conventions for LLM operations, backed by the Grafana stack for storage and visualization.
 
 ### Telemetry Pipeline
 
-animus-rs emits traces via OTLP gRPC to the observability stack:
+animus-rs emits all three signal types via OTLP to the OTel Collector, which routes them to the appropriate backends:
 
 ```
-animus-rs (tracing + tracing-opentelemetry)
+animus-rs (tracing + tracing-opentelemetry + opentelemetry-appender-tracing)
     → OTLP gRPC (:4317)
-        → Grafana Tempo (traces)
-        → Grafana Loki (logs, future)
-        → Prometheus (metrics, future)
-    → Grafana UI (:3000) — pre-configured datasources
+        → OTel Collector
+            → Tempo (traces)
+            → Prometheus (metrics, via remote write)
+            → Loki (logs, via OTLP HTTP)
+    → Grafana UI (:3000) — pre-configured datasources with cross-linking
 ```
 
 **Traces:** Every work item execution gets a span (`work.execute`) with work type, ID, and state transitions as span events. LLM calls get GenAI spans (`gen_ai.chat`, `gen_ai.embeddings`) with model, provider, and token usage attributes.
 
-**No custom event tables.** Observability flows to the Grafana stack, not into the application database. Postgres stores domain state; OTel handles observability. Cleaner separation.
+**Metrics:** Counter and histogram instruments for work submission, state transitions, queue operations, memory operations, operation duration, and LLM token usage (`src/telemetry/metrics.rs`). All emitted via the OTel Meter API.
 
-The `tracing` + `tracing-opentelemetry` bridge means Rust code uses idiomatic `tracing::instrument` / `tracing::info!()` macros, and the OTel layer exports them as spans and logs.
+**Logs:** `tracing::info!` / `tracing::warn!` / etc. are bridged to OTel logs via `opentelemetry-appender-tracing` and exported to Loki. No separate logging system — `tracing` macros produce both OTel spans and OTel logs.
+
+**No custom event tables.** Observability flows to the Grafana stack, not into the application database. Postgres stores domain state; OTel handles observability. Cleaner separation.
 
 ### Observability Stack
 
-The full Grafana stack runs alongside Postgres in Docker Compose:
+The full observability stack is part of the animus appliance:
 
 | Service | Port | Purpose |
 |---------|------|---------|
-| **Tempo** | 4317/4318 | Trace storage, receives OTLP gRPC/HTTP |
-| **Loki** | 3100 | Log aggregation |
-| **Prometheus** | 9090 | Metrics storage |
-| **Grafana** | 3000 | Unified UI with pre-provisioned datasources |
+| **OTel Collector** | 4317/4318 | Unified OTLP ingestion, routes to backends |
+| **Tempo** | 3200 (API) | Trace storage, receives from Collector via OTLP gRPC |
+| **Loki** | 3100 | Log aggregation, receives from Collector via OTLP HTTP |
+| **Prometheus** | 9090 | Metrics storage, receives from Collector via remote write |
+| **Grafana** | 3000 | Unified UI with pre-provisioned, cross-linked datasources |
 
-All observability data is persisted in Docker volumes (`tempo-data`, `loki-data`, `prometheus-data`, `grafana-data`). Same volumes across container restarts — no data loss.
+Grafana datasources are pre-wired at startup with full cross-linking: Tempo→Loki (traces to logs), Tempo→Prometheus (traces to metrics), Loki→Tempo (logs to traces via derived fields), plus node graph and service map support.
 
-Grafana auto-provisions Tempo, Loki, and Prometheus as datasources on startup (`docker/grafana/datasources.yml`). No manual configuration needed — `docker compose up -d` gives you a fully wired observability stack.
+All observability data is persisted in Docker volumes. Same volumes across container restarts — no data loss.
+
+Tempo runs with `metrics_generator` enabled (service-graphs, span-metrics, local-blocks processors), which powers Grafana's Traces Drilldown and service map views and writes derived metrics to Prometheus.
 
 ## Storage
 
@@ -221,38 +229,77 @@ The system doesn't care what the worker does. It cares about:
 
 ## Deployment
 
-### Infrastructure Stack
+### The Animus Appliance
 
-One `docker compose up -d` starts everything animus-rs needs:
+An animus is a self-contained, vertically-integrated appliance. One `docker compose up` starts a complete, working agent with integrated observability:
 
-| Container | Image | Purpose |
-|-----------|-------|---------|
-| **postgres** | Custom (`docker/Dockerfile`) | Postgres 17 + pgmq + pgvector |
-| **tempo** | `grafana/tempo` | Trace storage (OTLP receiver) |
-| **loki** | `grafana/loki` | Log aggregation |
-| **prometheus** | `prom/prometheus` | Metrics storage |
-| **grafana** | `grafana/grafana` | Unified observability UI |
+```
+┌──────────────────────────────────────────────────┐
+│                    animus                         │
+│                                                  │
+│  animus-rs  ←→  Postgres (pgmq + pgvector)       │
+│      │                                           │
+│      ▼ OTLP                                      │
+│  OTel Collector → Tempo (traces)                 │
+│                 → Prometheus (metrics)            │
+│                 → Loki (logs)                     │
+│                                                  │
+│  Grafana (:3000) — your window into the agent    │
+└──────────────────────────────────────────────────┘
+```
+
+| Container | Purpose |
+|-----------|---------|
+| **animus-rs** | The agent service |
+| **postgres** | Postgres + pgmq + pgvector |
+| **otel-collector** | OTLP ingestion, routes to backends |
+| **tempo** | Trace storage |
+| **loki** | Log aggregation |
+| **prometheus** | Metrics storage |
+| **grafana** | Unified observability UI |
+
+This is the default. No external services required. No accounts to create. No API keys for observability. Clone the repo, `docker compose up`, open `localhost:3000`.
+
+### Fleet Deployment (Shared Observer)
+
+When running multiple animi (Latin plural, second declension neuter), you can amortize the observability stack across instances. A separate `docker-compose.observer.yml` provides a standalone observer:
+
+```
+┌──────────┐ ┌──────────┐ ┌──────────┐
+│ animus-1 │ │ animus-2 │ │ animus-N │   each: animus-rs + Postgres
+└────┬─────┘ └────┬─────┘ └────┬─────┘
+     │            │            │
+     └────────────┼────────────┘
+                  │ OTLP (:4317)
+         ┌────────▼────────┐
+         │  shared observer │   OTel Collector + Tempo + Prometheus
+         │  (separate host) │   + Loki + Grafana
+         └─────────────────┘
+```
+
+Two compose files in the repo:
+
+| File | Purpose | Command |
+|------|---------|---------|
+| `docker-compose.yml` | Full appliance (default) | `docker compose up` |
+| `docker-compose.observer.yml` | Shared observer for fleet use | `docker compose -f docker-compose.observer.yml up` |
+
+Each animus in the fleet runs with `--profile core` to skip its local observability stack, pointing OTLP at the shared observer:
+
+```sh
+OTEL_ENDPOINT=http://observer-host:4317 docker compose --profile core up
+```
+
+Most users will run 1:1 (one animus, one observer built in). The shared pattern is for operators running 15+ animi on one or more hosts.
+
+### Configuration
+
+animus-rs connects to the stack via environment variables:
+
+- `DATABASE_URL` — Postgres connection string (default: `postgres://animus:animus_dev@postgres:5432/animus_dev`)
+- `OTEL_ENDPOINT` — OTLP gRPC endpoint (default: `http://otel-collector:4317`, overridable for fleet use)
 
 The Postgres image is built from `ghcr.io/pgmq/pg17-pgmq` (pgmq pre-installed) with `postgresql-17-pgvector` added via apt. Extensions are enabled at init time via `docker/init-extensions.sql`. One image, one set of extension versions, no environment drift.
-
-The same Docker Compose stack is used across all environments:
-
-- **Local dev:** `docker compose up -d` — full stack with Grafana UI at `:3000`
-- **CI:** GitHub Actions runs the same containers as service containers
-- **Production:** Same images with production config (volumes, networking, secrets)
-
-### animus-rs Service
-
-animus-rs connects to the stack via two env vars:
-
-- `DATABASE_URL` — Postgres connection string
-- `OTEL_ENDPOINT` — Tempo OTLP endpoint (`:4317`)
-
-Deployment per environment:
-
-- **Local dev:** `cargo run` or tests against Docker Compose
-- **CI:** `cargo test -- --include-ignored` against the service containers
-- **Production (Arch Linux):** systemd user service (`~/.config/systemd/user/animus.service`), secrets via `EnvironmentFile` (chmod 600)
 
 Migrations run at startup (`Db::migrate()`) or manually via `cargo sqlx migrate run`.
 
@@ -260,21 +307,28 @@ See [docs/db.md](docs/db.md) for the full schema and API surface.
 
 ## Implementation Status
 
-### Implemented (Milestone 1: Data Plane)
+### Implemented (Milestone 1: Data Plane + Observability)
 - **Config**: Typed env var loading, `secrecy::SecretString`, `dotenvy` for `.env`
 - **DB pool + migrations**: SQLx `PgPool`, three migrations (extensions, work_items, memories)
 - **pgmq operations**: create, send, read, archive, delete via SQL functions
 - **Work items**: submit with structural dedup, transactional insert + dedup check + pgmq send
 - **Semantic memory**: pgvector storage, vector similarity search (cosine), hybrid BM25+vector
 - **LLM module**: rig-core Anthropic provider factory
-- **OpenTelemetry**: OTel init, GenAI semantic convention spans, work span helpers
-- **Observability stack**: Grafana + Tempo + Loki + Prometheus, pre-wired datasources
-- **Infrastructure**: Docker Compose with Postgres (pgmq + pgvector) + full Grafana stack
+- **Telemetry**: Three-signal OTel pipeline (traces, metrics, logs), GenAI semantic convention spans, work span helpers, metric instrument factories, `TelemetryGuard` with force-flush
+- **Observability stack**: OTel Collector + Tempo + Loki + Prometheus + Grafana, cross-linked datasources, metrics generator with service graphs
+- **Infrastructure**: Docker Compose appliance with Postgres (pgmq + pgvector) + full observability stack
 - **Core types**: WorkItem, State, Provenance, Outcome, NewWorkItem builder
 - **State machine**: enforced valid transitions via `State::can_transition_to()`
-- **Test suite**: 14 tests (config, telemetry, DB, pgmq, work, memory, full lifecycle)
+- **Test suite**: 18 tests (config, telemetry, DB, pgmq, work, memory, full lifecycle, observability smoke tests)
 
-### Not Yet Implemented (Milestones 2+: Control Plane, Workers, CLI)
+### Not Yet Implemented (Milestone 2: Appliance Packaging)
+- Dockerfile for animus-rs (multi-stage build)
+- animus-rs as a service in docker-compose
+- Compose profiles (`core` for fleet use without local observability)
+- `docker-compose.observer.yml` for shared fleet observer
+- `animus serve` daemon mode
+
+### Not Yet Implemented (Milestones 3+: Control Plane, Workers, CLI)
 - Worker trait and worker pool
 - Control plane scheduling and domain center orchestration
 - Capacity management (global + per-type limits)
@@ -284,7 +338,6 @@ See [docs/db.md](docs/db.md) for the full schema and API surface.
 - Child work spawning and continuations
 - IPC layer (Unix domain socket)
 - CLI commands (status, list, show, logs)
-- `animus serve` daemon mode
 - SQLx offline metadata for CI
 
 ## Open Design Questions
