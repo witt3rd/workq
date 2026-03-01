@@ -892,7 +892,7 @@ Combining engage, ledger, and awareness configuration:
 [faculty]
 name = "social"
 accepts = ["engage", "respond", "check-in"]
-max_concurrent = 3
+concurrent = false          # social foci share relational state, don't parallelize
 
 [faculty.orient]
 command = "scripts/social-orient"

@@ -24,6 +24,8 @@ A **faculty** is a cognitive specialization — Social, Initiative, Heartbeat, R
 
 A **focus** is a single activation of a faculty on a specific work item. Ephemeral, atomic, self-contained. Four phases: Orient → Engage → Consolidate → Recover. Orient and consolidate are external hooks (any executable). Engage is a built-in agentic loop configured by the faculty. Recover handles failures.
 
+**Concurrency is separated into capability and allocation.** The faculty declares *whether* it supports parallel foci and *how* they're isolated (e.g., git worktrees for engineering work). The control plane decides *how many* to run based on global resource limits and the work queue's dependency graph. A Social faculty may declare `concurrent = false` because foci share relational state. An Engineer faculty declares `concurrent = true, isolation = worktree` because independent implementation work can fully parallelize in isolated branches.
+
 ### 4. Work-Once Guarantee
 
 A work item is claimed by exactly one focus (pgmq visibility timeout). Duplicates are detected and merged. Every work item either completes, fails (with retry), or goes dead — nothing disappears silently.
@@ -166,36 +168,60 @@ Orient → Engage → Consolidate
 Faculties are TOML — configuration, not code:
 
 ```toml
+# A faculty that doesn't parallelize (shared relational state)
 [faculty]
 name = "social"
 accepts = ["engage", "respond", "check-in"]
-max_concurrent = 3
+concurrent = false
 
 [faculty.orient]
 command = "scripts/social-orient"
-auto_activate_skills = true
 
 [faculty.engage]
 model = "claude-sonnet-4-5-20250514"
 system_prompt_file = "prompts/social.md"
 tools = ["memory-search", "calendar", "send-message"]
 max_turns = 50
-parallel_tool_execution = true
-code_execution = true
-ledger_nudge_interval = 5
-truncate_closed_blocks = true
 
 [faculty.awareness]
 enabled = true
-lookback_hours = 24
 
 [faculty.consolidate]
 command = "scripts/social-consolidate"
-skill_creation = true
 
 [faculty.recover]
 command = "scripts/recover-default"
 max_attempts = 3
+backoff = "exponential"
+```
+
+```toml
+# A faculty that parallelizes with git worktree isolation
+[faculty]
+name = "engineer"
+accepts = ["implement", "fix", "refactor", "test"]
+concurrent = true
+isolation = "worktree"
+
+[faculty.orient]
+command = "scripts/engineer-orient"
+
+[faculty.engage]
+model = "claude-sonnet-4-5-20250514"
+system_prompt_file = "prompts/engineer.md"
+tools = ["read_file", "write_file", "edit_file", "bash", "grep", "glob"]
+max_turns = 100
+code_execution = true
+
+[faculty.awareness]
+enabled = true
+
+[faculty.consolidate]
+command = "scripts/engineer-consolidate"
+
+[faculty.recover]
+command = "scripts/recover-default"
+max_attempts = 2
 backoff = "exponential"
 ```
 
