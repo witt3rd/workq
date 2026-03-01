@@ -174,6 +174,64 @@ impl super::Db {
         Ok(SubmitResult::Created(Box::new(item)))
     }
 
+    /// List work items with optional filters.
+    pub async fn list_work_items(
+        &self,
+        state: Option<State>,
+        work_type: Option<&str>,
+        limit: i64,
+    ) -> Result<Vec<WorkItem>> {
+        // Build query dynamically based on filters
+        let rows: Vec<WorkItemRow> = match (state, work_type) {
+            (Some(s), Some(wt)) => {
+                sqlx::query_as(
+                    "SELECT id, work_type, dedup_key, source, trigger_info, params, priority, state, merged_into, parent_id, attempts, max_attempts, created_at, updated_at, resolved_at, outcome_data, outcome_error, outcome_ms
+                     FROM work_items WHERE state = $1 AND work_type = $2
+                     ORDER BY created_at DESC LIMIT $3",
+                )
+                .bind(s.to_string())
+                .bind(wt)
+                .bind(limit)
+                .fetch_all(&self.pool)
+                .await?
+            }
+            (Some(s), None) => {
+                sqlx::query_as(
+                    "SELECT id, work_type, dedup_key, source, trigger_info, params, priority, state, merged_into, parent_id, attempts, max_attempts, created_at, updated_at, resolved_at, outcome_data, outcome_error, outcome_ms
+                     FROM work_items WHERE state = $1
+                     ORDER BY created_at DESC LIMIT $2",
+                )
+                .bind(s.to_string())
+                .bind(limit)
+                .fetch_all(&self.pool)
+                .await?
+            }
+            (None, Some(wt)) => {
+                sqlx::query_as(
+                    "SELECT id, work_type, dedup_key, source, trigger_info, params, priority, state, merged_into, parent_id, attempts, max_attempts, created_at, updated_at, resolved_at, outcome_data, outcome_error, outcome_ms
+                     FROM work_items WHERE work_type = $1
+                     ORDER BY created_at DESC LIMIT $2",
+                )
+                .bind(wt)
+                .bind(limit)
+                .fetch_all(&self.pool)
+                .await?
+            }
+            (None, None) => {
+                sqlx::query_as(
+                    "SELECT id, work_type, dedup_key, source, trigger_info, params, priority, state, merged_into, parent_id, attempts, max_attempts, created_at, updated_at, resolved_at, outcome_data, outcome_error, outcome_ms
+                     FROM work_items
+                     ORDER BY created_at DESC LIMIT $1",
+                )
+                .bind(limit)
+                .fetch_all(&self.pool)
+                .await?
+            }
+        };
+
+        rows.into_iter().map(|r| r.try_into_work_item()).collect()
+    }
+
     /// Get a work item by ID.
     pub async fn get_work_item(&self, id: WorkId) -> Result<WorkItem> {
         let row: Option<WorkItemRow> = sqlx::query_as(
