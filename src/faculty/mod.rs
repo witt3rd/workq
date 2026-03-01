@@ -47,6 +47,14 @@ pub struct FacultyRegistry {
 }
 
 impl FacultyRegistry {
+    /// Create an empty registry with no faculties.
+    pub fn empty() -> Self {
+        Self {
+            faculties: HashMap::new(),
+            work_type_index: HashMap::new(),
+        }
+    }
+
     /// Load all `.toml` files from a directory and build the registry.
     pub fn load_from_dir(dir: &Path) -> Result<Self> {
         let mut faculties = HashMap::new();

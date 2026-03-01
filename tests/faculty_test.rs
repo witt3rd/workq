@@ -1,7 +1,6 @@
 //! End-to-end faculty integration test.
 //!
-//! Requires the full docker stack: `docker compose up -d`
-//! (Postgres + OTel Collector + Tempo + Prometheus + Loki + Grafana)
+//! Requires the docker stack: `docker compose up -d`
 
 use animus_rs::db::Db;
 use animus_rs::engine::{ControlConfig, ControlPlane};
@@ -10,6 +9,76 @@ use animus_rs::model::work::{NewWorkItem, State};
 use animus_rs::telemetry::{TelemetryConfig, init_telemetry};
 use std::path::Path;
 use std::sync::Arc;
+
+/// Work with no matching faculty stays queued — not dead-lettered.
+/// The control plane should skip unroutable work and let the visibility
+/// timeout return it to the queue for later pickup.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore] // requires docker compose up -d
+async fn unroutable_work_stays_queued() {
+    dotenvy::dotenv().ok();
+    let url = std::env::var("DATABASE_URL").expect("DATABASE_URL must be set");
+    let db = Db::connect(&url).await.expect("db connect");
+    db.migrate().await.expect("migrate");
+    db.create_queue("work").await.expect("create queue");
+    let db = Arc::new(db);
+
+    // Empty registry — no faculties at all
+    let registry = FacultyRegistry::empty();
+
+    let focus_base = std::env::temp_dir()
+        .join("animus-test")
+        .join(uuid::Uuid::new_v4().to_string());
+
+    let config = ControlConfig {
+        focus_base_dir: focus_base.clone(),
+        visibility_timeout: 2, // short timeout so message reappears quickly
+        poll_interval: std::time::Duration::from_millis(200),
+    };
+
+    let control = ControlPlane::new(Arc::clone(&db), Arc::new(registry), config, 4);
+
+    // Start control plane
+    let ctrl = control.clone();
+    let handle = tokio::spawn(async move {
+        ctrl.run().await.expect("control plane run");
+    });
+
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+
+    // Submit work with a type no faculty accepts
+    let dedup = format!("test-unroutable-{}", uuid::Uuid::new_v4());
+    let result = db
+        .submit_work(
+            NewWorkItem::new("unknown_type", "test")
+                .dedup_key(&dedup)
+                .params(serde_json::json!({"test": true})),
+        )
+        .await
+        .expect("submit work");
+
+    let work_id = match result {
+        animus_rs::db::work::SubmitResult::Created(item) => item.id,
+        animus_rs::db::work::SubmitResult::Merged { .. } => panic!("unexpected merge"),
+    };
+
+    // Give the control plane time to see the work and decide
+    tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+
+    // Work item should still be Queued — NOT Dead
+    let item = db.get_work_item(work_id).await.expect("get work item");
+    assert_eq!(
+        item.state,
+        State::Queued,
+        "unroutable work should stay Queued, got {:?}",
+        item.state
+    );
+
+    // Shutdown
+    control.shutdown();
+    let _ = tokio::time::timeout(std::time::Duration::from_secs(2), handle).await;
+    let _ = tokio::fs::remove_dir_all(&focus_base).await;
+}
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[ignore] // requires docker compose up -d

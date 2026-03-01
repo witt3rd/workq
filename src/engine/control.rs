@@ -163,12 +163,10 @@ impl ControlPlane {
             let faculty = match self.registry.faculty_for_work_type(&item.work_type) {
                 Some(f) => f.clone(),
                 None => {
-                    warn!(work_type = %item.work_type, "no faculty for work type, dead-lettering");
-                    record_state_transition(&work_span, "queued", "dead");
-                    self.db
-                        .transition_state(work_id, State::Queued, State::Dead)
-                        .await?;
-                    self.db.archive_message("work", msg.msg_id).await?;
+                    // No faculty registered for this work type. Leave the message
+                    // in the queue — the visibility timeout will make it reappear.
+                    // A faculty may be registered later (e.g., during bootstrap).
+                    info!(work_type = %item.work_type, "no faculty for work type, skipping (will retry after visibility timeout)");
                     return Ok(());
                 }
             };
