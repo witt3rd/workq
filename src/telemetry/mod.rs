@@ -131,8 +131,10 @@ pub fn init_telemetry(config: TelemetryConfig) -> Result<TelemetryGuard> {
         );
 
         // --- Subscriber ---
+        // Both OTel export AND stderr output — see what the agent is doing
         tracing_subscriber::registry()
             .with(env_filter)
+            .with(tracing_subscriber::fmt::layer().compact())
             .with(otel_trace_layer)
             .with(otel_log_layer)
             .try_init()
