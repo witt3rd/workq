@@ -1,275 +1,752 @@
 # Implementation Plan
 
-*From design to working substrate — milestone-based execution.*
+*Tests first. Implementation earns its existence by making red tests green.*
 
-## What We Accomplished Today (2026-03-01)
+## What We Accomplished (2026-03-01)
 
 ### Research
-- Deep analysis of MicroClaw's agent loop — tool system, hooks, permissions, context management, LLM integration, sub-agents, streaming, session persistence (`docs/research/microclaw/agent.md`)
+- Deep analysis of MicroClaw's agent loop (`docs/research/microclaw/agent.md`)
 
 ### Design Decisions
-1. **Engage phase is a built-in loop**, not an external process. Orient/consolidate/recover remain external hooks. Escape hatch available for faculties that need a custom loop.
-2. **Work ledger in Postgres**, not filesystem. Append-only typed entries (plan/finding/decision/step/error/note). Agent-maintained via `ledger_append`/`ledger_read` tools. Engine reads it for compaction. Cross-faculty findings feed the awareness digest.
-3. **Bounded sub-contexts** replace token-counting compaction. `ledger_append(step)` closes a context block. Closed blocks are replaced with ledger stubs. Open block preserved verbatim.
-4. **Parallel tool execution** via `tokio::JoinSet`, not sequential.
-5. **Child work items** via the work queue, not in-process sub-agents. `spawn_child_work`/`await_child_work`/`check_child_work`.
-6. **Awareness digest** — engine-level cross-faculty coherence, assembled from `work_items` + `work_ledger`, injected at orient. Default-on.
-7. **Code execution sandbox** — Docker-based Python sandbox with tool SDK. Agent writes code that calls tools; return value (not raw output) enters context.
-8. **Skills** — progressive discovery, runtime activation, autopoietic creation from ledger findings, filesystem storage with Postgres activation index.
-9. **Drop rig-core for LLM calls** — thin `LlmClient` trait with Anthropic + OpenAI implementations via raw `reqwest` + SSE. Keep `rig-postgres` for embeddings.
-10. **DESIGN.md restructured** as high-level overview pointing to subsystem docs.
+1. Engage phase is a built-in loop (orient/consolidate/recover remain hooks)
+2. Work ledger in Postgres (append-only typed entries, agent-maintained)
+3. Bounded sub-contexts via ledger step entries (not token counting)
+4. Parallel tool execution via `tokio::JoinSet`
+5. Child work items via the work queue (not in-process sub-agents)
+6. Awareness digest for cross-faculty coherence (default-on)
+7. Code execution sandbox (Docker, Python, tool SDK)
+8. Skills with progressive discovery and autopoietic creation
+9. Drop rig-core for LLM calls (thin `LlmClient` via `reqwest` + SSE)
+10. DESIGN.md restructured as overview pointing to subsystem docs
 
-### Design Documents Produced
-| Document | Lines | Covers |
-|---|---|---|
-| `docs/research/microclaw/agent.md` | 906 | MicroClaw agent loop deep research |
-| `docs/ledger.md` | 473 | Work ledger schema, tools, context management, observability |
-| `docs/engage.md` | 1082 | Engage loop: sub-contexts, parallel tools, child work, awareness, sandbox |
-| `docs/skills.md` | 701 | Skill discovery, activation, autopoiesis, sandbox integration |
-| `docs/llm.md` | 619 | LlmClient trait, Anthropic/OpenAI providers, migration from rig-core |
-| `DESIGN.md` | 261 | Restructured overview with subsystem pointers |
-
-**Total: ~4,000 lines of design, 0 lines of design debt.**
-
----
-
-## What's Already Implemented
-
-| Module | Status |
+### Design Documents
+| Document | Covers |
 |---|---|
-| `src/config/` | Typed env var loading, secrecy |
-| `src/db/mod.rs` | PgPool, SQLx migrations |
-| `src/db/pgmq.rs` | Queue operations (create, send, read, archive, delete) |
-| `src/db/work.rs` | Work item submit with structural dedup |
-| `src/memory/store.rs` | pgvector storage, vector search, hybrid BM25+vector |
-| `src/llm/mod.rs` | rig-core Anthropic client factory (to be replaced) |
-| `src/model/work.rs` | WorkItem, State, Provenance, Outcome |
-| `src/model/memory.rs` | MemoryEntry, NewMemory, MemoryFilters |
-| `src/telemetry/` | Three-signal OTel (traces, metrics, logs), GenAI spans |
-| `src/faculty/mod.rs` | Faculty config (TOML), hook definitions, registry |
-| `src/engine/control.rs` | ControlPlane loop: PgListener, route to faculty, spawn focus |
-| `src/engine/focus.rs` | Focus lifecycle: dir creation, hook pipeline, outcome reading |
-| `src/bin/animus.rs` | Control plane daemon |
-| `Dockerfile` | Multi-stage Rust build |
-| `docker-compose.yml` | Full appliance (animus + Postgres + observability) |
-
-Migrations: extensions, work_items, memories, unique_dedup_index.
+| `docs/engage.md` | Engage loop: sub-contexts, parallel tools, child work, awareness, sandbox |
+| `docs/ledger.md` | Work ledger schema, tools, context management |
+| `docs/skills.md` | Skill discovery, activation, autopoiesis |
+| `docs/llm.md` | LlmClient trait, Anthropic/OpenAI providers |
+| `docs/research/microclaw/agent.md` | MicroClaw agent loop analysis |
 
 ---
 
-## Implementation Milestones
+## TDD Approach
 
-The milestones are ordered by dependency. Each builds on the previous. Each is independently shippable and testable.
+Every milestone is defined by its tests. The workflow for each:
 
-### Milestone 3: LLM Client
+1. **Write the tests first.** The tests ARE the spec. They define what "done" means in executable form.
+2. **Watch them fail.** Red tests confirm the test is actually testing something.
+3. **Write the minimum implementation** to make the tests green.
+4. **Refactor** with confidence — the tests catch regressions.
+5. **Commit.** Green tests = shippable increment.
+
+Tests come in two tiers:
+- **Unit tests** (`#[test]`) — always run, no external dependencies. These are the primary driver.
+- **Integration tests** (`#[test] #[ignore]`) — need Postgres/Docker/API keys. Run manually or in CI.
+
+---
+
+## Milestone 3: LLM Client
 
 **Replace rig-core with thin provider clients.**
 
-This unblocks everything else — the engage loop needs `LlmClient` to make LLM calls.
+### Tests First
 
-| Task | Files | Estimate |
-|---|---|---|
-| Define `LlmClient` trait, request/response types | `src/llm/types.rs`, `src/llm/mod.rs` | Small |
-| Implement SSE stream parser | `src/llm/sse.rs` | Small |
-| Implement Anthropic Messages API client | `src/llm/anthropic.rs` | Medium |
-| Implement OpenAI Chat Completions client | `src/llm/openai.rs` | Medium |
-| Provider factory (`create_client`) | `src/llm/mod.rs` | Small |
-| Add `reqwest` to dependencies, update `Cargo.toml` | `Cargo.toml` | Small |
-| Integration test: Anthropic round-trip | `tests/llm_test.rs` | Small |
-| Remove direct rig-core imports for LLM | `src/llm/mod.rs` (old) | Small |
+```rust
+// tests/llm_types_test.rs — unit, always runs
+
+#[test]
+fn completion_request_serializes_to_anthropic_format() {
+    // A CompletionRequest with system prompt, messages, and tools
+    // serializes to valid Anthropic Messages API JSON
+}
+
+#[test]
+fn completion_request_serializes_to_openai_format() {
+    // Same request serializes to valid OpenAI Chat Completions JSON
+    // System prompt becomes a system-role message
+}
+
+#[test]
+fn anthropic_response_parses_text_and_tool_use() {
+    // Raw Anthropic JSON with text + tool_use blocks
+    // parses into CompletionResponse with correct ContentBlocks
+}
+
+#[test]
+fn anthropic_response_parses_stop_reasons() {
+    // "end_turn" → StopReason::EndTurn
+    // "tool_use" → StopReason::ToolUse
+    // "max_tokens" → StopReason::MaxTokens
+}
+
+#[test]
+fn openai_response_parses_tool_calls() {
+    // OpenAI format with choices[0].message.tool_calls
+    // maps to ContentBlock::ToolUse with correct id/name/input
+}
+
+#[test]
+fn sse_parser_handles_partial_chunks() {
+    // SSE data split across multiple chunks reassembles correctly
+}
+
+#[test]
+fn sse_parser_handles_anthropic_stream_events() {
+    // content_block_start, content_block_delta (text + tool JSON),
+    // message_delta (stop_reason + usage) → correct StreamEvents
+}
+
+#[test]
+fn rate_limit_error_extracts_retry_after() {
+    // 429 response with retry-after header → LlmError::RateLimited
+}
+
+#[test]
+fn api_error_preserves_status_and_message() {
+    // 400 response with error body → LlmError::Api { status: 400, message: "..." }
+}
+```
+
+```rust
+// tests/llm_integration_test.rs — ignored, needs API key
+
+#[test]
+#[ignore]
+fn anthropic_complete_returns_text() {
+    // Real API call with a simple prompt, no tools
+    // Returns CompletionResponse with StopReason::EndTurn and non-empty text
+}
+
+#[test]
+#[ignore]
+fn anthropic_complete_with_tools_returns_tool_use() {
+    // Real API call with a tool definition and a prompt that triggers tool use
+    // Returns CompletionResponse with StopReason::ToolUse and a ToolUse block
+}
+
+#[test]
+#[ignore]
+fn anthropic_stream_emits_text_deltas() {
+    // Real streaming API call
+    // StreamEvents arrive via the channel, final response matches non-streaming
+}
+```
+
+### Then Implement
+- `src/llm/types.rs` — `CompletionRequest`, `CompletionResponse`, `Message`, `ContentBlock`, `StopReason`, `Usage`, `ToolDefinition`, `StreamEvent`, `LlmError`
+- `src/llm/sse.rs` — `SseParser`
+- `src/llm/anthropic.rs` — `AnthropicClient` implementing `LlmClient`
+- `src/llm/openai.rs` — `OpenAiClient` implementing `LlmClient`
+- `src/llm/mod.rs` — `LlmClient` trait, `create_client` factory
 
 **Design doc:** [docs/llm.md](docs/llm.md)
-**Tests:** Unit tests for SSE parser, type serialization. Integration test (ignored, needs API key) for Anthropic round-trip.
-**Done when:** `cargo test` passes, `LlmClient::complete` returns a `CompletionResponse` from Anthropic.
 
 ---
 
-### Milestone 4: Work Ledger
+## Milestone 4: Work Ledger
 
-**Add the `work_ledger` table and Db API.**
+**Postgres-backed durable working memory.**
 
-This unblocks the engage loop's context management (bounded sub-contexts depend on ledger entries).
+### Tests First
 
-| Task | Files | Estimate |
-|---|---|---|
-| SQLx migration: `work_ledger` table | `migrations/..._work_ledger.sql` | Small |
-| `LedgerEntryType` enum, `LedgerEntry` struct | `src/model/ledger.rs` | Small |
-| `Db::ledger_append`, `Db::ledger_read`, `Db::ledger_read_formatted` | `src/db/ledger.rs` | Medium |
-| Unit tests for ledger CRUD | `tests/ledger_test.rs` | Small |
-| Integrate ledger into `Db` public API | `src/db/mod.rs`, `src/lib.rs` | Small |
+```rust
+// tests/ledger_test.rs — ignored, needs Postgres
+
+#[test]
+#[ignore]
+fn ledger_append_assigns_sequential_ids() {
+    // Append 3 entries to a work item
+    // seq values are 1, 2, 3
+}
+
+#[test]
+#[ignore]
+fn ledger_append_rejects_invalid_entry_type() {
+    // entry_type "banana" → error
+}
+
+#[test]
+#[ignore]
+fn ledger_read_returns_entries_in_order() {
+    // Append plan, finding, step, error
+    // Read all → returns in seq order
+}
+
+#[test]
+#[ignore]
+fn ledger_read_filters_by_entry_type() {
+    // Append plan, finding, step, finding, step
+    // Read with filter=finding → returns 2 entries
+}
+
+#[test]
+#[ignore]
+fn ledger_read_last_n_returns_most_recent() {
+    // Append 10 entries
+    // Read with last_n=3 → returns entries 8, 9, 10
+}
+
+#[test]
+#[ignore]
+fn ledger_read_formatted_groups_by_type() {
+    // Append plan, finding, step, decision, error
+    // Read formatted → string with PLAN, FINDINGS, STEPS, DECISIONS, ERRORS sections
+}
+
+#[test]
+#[ignore]
+fn ledger_read_formatted_shows_only_latest_plan() {
+    // Append plan v1, finding, plan v2
+    // Formatted output shows plan v2 only (not v1)
+}
+
+#[test]
+#[ignore]
+fn ledger_entries_cascade_delete_with_work_item() {
+    // Create work item, append ledger entries
+    // Delete work item → ledger entries gone
+}
+
+#[test]
+#[ignore]
+fn ledger_entries_isolated_between_work_items() {
+    // Append to work_item_a and work_item_b
+    // Read for work_item_a → only its entries
+}
+```
+
+```rust
+// Unit tests for types — always runs
+
+#[test]
+fn ledger_entry_type_roundtrips_through_string() {
+    // Plan → "plan" → Plan, Finding → "finding" → Finding, etc.
+}
+```
+
+### Then Implement
+- Migration: `work_ledger` table with `ON DELETE CASCADE`
+- `src/model/ledger.rs` — `LedgerEntry`, `LedgerEntryType`
+- `src/db/ledger.rs` — `Db::ledger_append`, `Db::ledger_read`, `Db::ledger_read_formatted`
 
 **Design doc:** [docs/ledger.md](docs/ledger.md)
-**Tests:** Integration tests (ignored) for append, read, read_formatted, filtering by type, `last_n` support.
-**Done when:** `Db::ledger_append` writes entries, `Db::ledger_read_formatted` returns grouped output.
 
 ---
 
-### Milestone 5: Core Engage Loop
+## Milestone 5a: Minimal Engage Loop
 
-**The agentic tool-use loop — the heart of the system.**
+**The simplest viable agentic loop.**
 
-Depends on: Milestone 3 (LLM client), Milestone 4 (ledger). This is the biggest milestone. Break into phases.
+Depends on: M3 (LLM client), M4 (ledger).
 
-#### Phase 5a: Minimal Loop
+### Tests First
 
-The simplest viable engage loop: call LLM, check stop_reason, execute tools sequentially, loop until end_turn or max_turns.
+```rust
+// tests/engage_test.rs
 
-| Task | Files | Estimate |
-|---|---|---|
-| `EngageLoop` struct with configuration | `src/engine/engage.rs` | Medium |
-| Tool trait and registry (engine tools: ledger_append, ledger_read) | `src/tools/mod.rs`, `src/tools/ledger.rs` | Medium |
-| Basic iteration: LLM call → tool execution → loop | `src/engine/engage.rs` | Large |
-| System prompt template (working memory, focus context) | `src/engine/prompt.rs` | Medium |
-| Wire into focus lifecycle (replace placeholder engage) | `src/engine/focus.rs` | Medium |
-| Integration test: focus runs engage loop with mock tools | `tests/engage_test.rs` | Medium |
+#[test]
+fn tool_registry_returns_definitions_for_registered_tools() {
+    // Register ledger_append and ledger_read
+    // definitions() returns both with correct JSON schemas
+}
 
-**Done when:** A focus can run a multi-turn engage loop with ledger tools, produce ledger entries, and terminate on end_turn.
+#[test]
+fn tool_registry_executes_tool_by_name() {
+    // Register a mock tool that returns "hello"
+    // execute("mock_tool", json!({})) → ToolResult { content: "hello", is_error: false }
+}
 
-#### Phase 5b: Parallel Tool Execution
+#[test]
+fn tool_registry_returns_error_for_unknown_tool() {
+    // execute("nonexistent", json!({})) → ToolResult { is_error: true }
+}
 
-| Task | Files | Estimate |
-|---|---|---|
-| `tokio::JoinSet` parallel tool dispatch | `src/engine/engage.rs` | Medium |
-| Concurrent hook invocation (before/after tool) | `src/engine/engage.rs` | Small |
-| Configuration: `parallel_tool_execution`, `max_parallel_tools` | `src/faculty/mod.rs` | Small |
+#[test]
+#[ignore] // needs Postgres + LLM
+fn engage_loop_terminates_on_end_turn() {
+    // Faculty with max_turns=10, prompt that requires no tools
+    // Loop runs 1 iteration, returns text, stop_reason=EndTurn
+}
 
-**Done when:** Multiple tool_use blocks in one LLM response execute concurrently.
+#[test]
+#[ignore]
+fn engage_loop_executes_tool_and_continues() {
+    // Prompt that triggers ledger_append tool call
+    // Loop runs 2+ iterations: tool call → tool result → final text
+    // Ledger entry exists in DB after
+}
 
-#### Phase 5c: Bounded Sub-Contexts
+#[test]
+#[ignore]
+fn engage_loop_respects_max_turns() {
+    // Faculty with max_turns=3, prompt that always calls tools
+    // Loop runs exactly 3 iterations, returns max-turns error/message
+}
 
-| Task | Files | Estimate |
-|---|---|---|
-| `ContextBlocks` tracking (step boundaries) | `src/engine/context.rs` | Medium |
-| Closed block truncation (replace with ledger stubs) | `src/engine/context.rs` | Medium |
-| Fallback: ledger-based compaction (threshold-triggered) | `src/engine/context.rs` | Medium |
-| Fallback: emergency LLM summarization | `src/engine/context.rs` | Small |
-| Engine nudge (iterations since last ledger write) | `src/engine/engage.rs` | Small |
+#[test]
+#[ignore]
+fn engage_loop_handles_tool_error_gracefully() {
+    // Tool that always returns is_error=true
+    // LLM receives error in tool_result, can reason about it
+    // Loop doesn't crash
+}
 
-**Done when:** Closed context blocks are replaced with ledger stubs. Context pressure stays bounded during long loops.
+#[test]
+fn system_prompt_includes_ledger_instructions() {
+    // Build system prompt for a faculty
+    // Contains "Working Memory" section with ledger_append guidance
+}
 
-#### Phase 5d: Engage Hooks
+#[test]
+fn system_prompt_includes_focus_context() {
+    // Build system prompt with orient context
+    // Contains the orient output
+}
 
-| Task | Files | Estimate |
-|---|---|---|
-| `BeforeLLMCall` hook event | `src/engine/hooks.rs` | Medium |
-| `BeforeToolCall` / `AfterToolCall` hook events | `src/engine/hooks.rs` | Medium |
-| Hook outcome: allow/block/modify with patches | `src/engine/hooks.rs` | Medium |
-| Hook discovery from filesystem | `src/engine/hooks.rs` | Small |
+#[test]
+fn messages_alternate_user_assistant_roles() {
+    // After tool execution, messages vec has:
+    // assistant (with tool_use), user (with tool_result)
+    // Validates the Anthropic protocol structure
+}
+```
 
-**Done when:** External hook scripts can intercept LLM calls and tool executions.
+### Then Implement
+- `src/tools/mod.rs` — `Tool` trait, `ToolDefinition`, `ToolResult`, `ToolRegistry`
+- `src/tools/ledger.rs` — `LedgerAppendTool`, `LedgerReadTool` (wired to `Db`)
+- `src/engine/engage.rs` — `EngageLoop::run()`: the iteration, LLM call, tool dispatch
+- `src/engine/prompt.rs` — System prompt template assembly
+- Wire into `src/engine/focus.rs`
 
 **Design doc:** [docs/engage.md](docs/engage.md) §§ 1-2
-**Tests at each phase.** The engage loop is critical infrastructure — every phase must be tested before the next begins.
 
 ---
 
-### Milestone 6: Awareness Digest
+## Milestone 5b: Parallel Tool Execution
 
-**Cross-faculty coherence.**
+Depends on: M5a.
 
-Depends on: Milestone 4 (ledger — findings are the raw material), Milestone 5a (engage loop — must exist to inject into).
+### Tests First
 
-| Task | Files | Estimate |
-|---|---|---|
-| Digest assembly queries (running, completed, findings) | `src/engine/awareness.rs` | Medium |
-| Digest formatting for system prompt injection | `src/engine/awareness.rs` | Small |
-| Inject during orient phase | `src/engine/focus.rs` | Small |
-| Configuration: `[faculty.awareness]` section | `src/faculty/mod.rs` | Small |
-| Integration test: digest includes sibling work | `tests/awareness_test.rs` | Medium |
+```rust
+#[test]
+#[ignore]
+fn parallel_tools_execute_concurrently() {
+    // Register 3 tools, each with a 100ms sleep
+    // LLM returns 3 tool_use blocks
+    // Total execution time < 200ms (not 300ms)
+}
+
+#[test]
+#[ignore]
+fn parallel_tool_results_match_by_id() {
+    // 3 parallel tool calls with distinct IDs
+    // Each tool_result has the correct tool_use_id
+}
+
+#[test]
+fn parallel_tools_disabled_executes_sequentially() {
+    // Faculty config: parallel_tool_execution = false
+    // 3 tools execute in order (total time ≈ 3x single)
+}
+```
+
+### Then Implement
+- `tokio::JoinSet` dispatch in `EngageLoop::run()`
+- `parallel_tool_execution` and `max_parallel_tools` config
+
+---
+
+## Milestone 5c: Bounded Sub-Contexts
+
+Depends on: M5a.
+
+### Tests First
+
+```rust
+#[test]
+fn step_entry_closes_context_block() {
+    // Messages: [iter1 tool_use, iter1 tool_result, iter2 assistant(ledger_append step)]
+    // ContextBlocks identifies boundary at iter2
+}
+
+#[test]
+fn closed_block_replaced_with_stub() {
+    // Messages with one closed block (plan + tool calls + step entry)
+    // After truncation: closed block → "[completed step 1: ...]"
+    // Open block preserved verbatim
+}
+
+#[test]
+fn multiple_closed_blocks_all_truncated() {
+    // 3 closed blocks + 1 open
+    // After truncation: 3 stubs + open block verbatim
+}
+
+#[test]
+fn open_block_never_truncated() {
+    // Even if open block is large, it's preserved in full
+}
+
+#[test]
+fn ledger_nudge_fires_after_threshold() {
+    // nudge_interval = 3
+    // 3 iterations without ledger_append → system message injected
+}
+
+#[test]
+fn ledger_nudge_resets_on_ledger_write() {
+    // 2 iterations, ledger_append, 2 more iterations → no nudge
+    // 2 iterations, ledger_append, 3 more → nudge
+}
+
+#[test]
+#[ignore]
+fn compaction_fallback_fires_on_token_pressure() {
+    // Messages exceed compact_threshold
+    // No step entries → ledger-based compaction fires
+    // Messages replaced with ledger summary + recent tail
+}
+```
+
+### Then Implement
+- `src/engine/context.rs` — `ContextBlocks`, truncation, compaction fallback
+- Nudge logic in `EngageLoop`
+
+**Design doc:** [docs/engage.md](docs/engage.md) § 1, [docs/ledger.md](docs/ledger.md)
+
+---
+
+## Milestone 6: Awareness Digest
+
+Depends on: M4 (ledger), M5a (engage loop).
+
+### Tests First
+
+```rust
+#[test]
+#[ignore]
+fn digest_includes_running_siblings() {
+    // Work items A (running) and B (running, current focus)
+    // Digest for B includes A with its latest plan
+}
+
+#[test]
+#[ignore]
+fn digest_includes_recently_completed_work() {
+    // Work item completed 2 hours ago
+    // Digest includes it with outcome summary
+}
+
+#[test]
+#[ignore]
+fn digest_includes_cross_faculty_findings() {
+    // Ledger finding from a different faculty's focus
+    // Appears in current focus's digest
+}
+
+#[test]
+#[ignore]
+fn digest_excludes_current_work_item() {
+    // Current focus's own work item doesn't appear in "running" section
+}
+
+#[test]
+#[ignore]
+fn digest_respects_lookback_hours() {
+    // lookback_hours = 1
+    // Work completed 2 hours ago excluded
+}
+
+#[test]
+#[ignore]
+fn digest_disabled_returns_empty() {
+    // Faculty config: awareness.enabled = false
+    // Digest is empty string
+}
+
+#[test]
+fn digest_format_is_readable() {
+    // Given structured data, formatted output has
+    // "Currently active:", "Recently completed:", "Recent findings:" sections
+}
+```
+
+### Then Implement
+- `src/engine/awareness.rs` — digest assembly and formatting
+- Inject in `src/engine/focus.rs` during orient
 
 **Design doc:** [docs/engage.md](docs/engage.md) § 4
-**Done when:** A focus's orient context includes awareness of running siblings and recent findings.
 
 ---
 
-### Milestone 7: Child Work Items
+## Milestone 7: Child Work Items
 
-**Async delegation via the work queue.**
+Depends on: M5a, existing work queue.
 
-Depends on: Milestone 5a (engage loop), existing work queue infrastructure.
+### Tests First
 
-| Task | Files | Estimate |
-|---|---|---|
-| `spawn_child_work` tool (creates child work item with parent_id) | `src/tools/child_work.rs` | Medium |
-| `await_child_work` tool (pg_notify-based blocking wait) | `src/tools/child_work.rs` | Medium |
-| `check_child_work` tool (non-blocking poll) | `src/tools/child_work.rs` | Small |
-| `NOTIFY` emission on work item terminal state transition | `src/db/work.rs` | Small |
-| Integration test: parent spawns child, awaits, reads outcome | `tests/child_work_test.rs` | Medium |
-| Depth limit enforcement (prevent unbounded recursion) | `src/tools/child_work.rs` | Small |
+```rust
+#[test]
+#[ignore]
+fn spawn_child_creates_work_item_with_parent_id() {
+    // spawn_child_work("analyze", "check the config", {})
+    // New work item in DB with parent_id = current work item
+}
+
+#[test]
+#[ignore]
+fn await_child_blocks_until_completion() {
+    // Spawn child, child completes after 1 second
+    // await_child_work returns outcome data
+}
+
+#[test]
+#[ignore]
+fn await_child_times_out() {
+    // Spawn child, child never completes
+    // await_child_work with timeout=1s → timeout error
+}
+
+#[test]
+#[ignore]
+fn await_multiple_children() {
+    // Spawn 3 children, all complete
+    // await_child_work([a, b, c]) → 3 outcomes
+}
+
+#[test]
+#[ignore]
+fn check_child_returns_state_without_blocking() {
+    // Spawn child (still running)
+    // check_child_work → state: "running", no block
+}
+
+#[test]
+#[ignore]
+fn child_depth_limit_enforced() {
+    // Work item at depth 5
+    // spawn_child_work → error (max depth exceeded)
+}
+
+#[test]
+#[ignore]
+fn child_outcome_includes_ledger_summary() {
+    // Child runs, writes ledger entries, completes
+    // await_child_work → outcome includes formatted ledger
+}
+```
+
+### Then Implement
+- `src/tools/child_work.rs`
+- `NOTIFY` on terminal state transitions in `src/db/work.rs`
 
 **Design doc:** [docs/engage.md](docs/engage.md) § 3
-**Done when:** A focus can spawn child work items and await their outcomes.
 
 ---
 
-### Milestone 8: Code Execution Sandbox
+## Milestone 8: Code Execution Sandbox
 
-**Docker-based Python sandbox for programmatic tool composition.**
+Depends on: M5a, Docker.
 
-Depends on: Milestone 5a (engage loop), Docker infrastructure (already present).
+### Tests First
 
-| Task | Files | Estimate |
-|---|---|---|
-| Sandbox container image (Python + tool SDK) | `docker/sandbox/Dockerfile`, `docker/sandbox/sdk/` | Medium |
-| Tool SDK: Python functions that call engine over HTTP | `docker/sandbox/sdk/tools.py` | Medium |
-| Engine-side HTTP endpoint for sandbox tool calls | `src/engine/sandbox.rs` | Medium |
-| `execute_code` tool implementation | `src/tools/sandbox.rs` | Large |
-| Container lifecycle (start, execute, capture output, destroy) | `src/engine/sandbox.rs` | Medium |
-| Resource limits (CPU, memory, timeout) | `src/engine/sandbox.rs` | Small |
-| OTel: nested spans for SDK calls | `src/engine/sandbox.rs` | Small |
-| Configuration: `[faculty.engage]` sandbox settings | `src/faculty/mod.rs` | Small |
-| Integration test: code execution with tool SDK calls | `tests/sandbox_test.rs` | Medium |
+```rust
+#[test]
+#[ignore] // needs Docker
+fn sandbox_executes_python_and_returns_output() {
+    // execute_code("return 2 + 2") → "4"
+}
+
+#[test]
+#[ignore]
+fn sandbox_tool_sdk_calls_engine_tools() {
+    // execute_code("result = read_file('test.txt'); return result[:10]")
+    // read_file tool is called via SDK, result returned
+}
+
+#[test]
+#[ignore]
+fn sandbox_timeout_kills_execution() {
+    // execute_code("import time; time.sleep(999)", timeout=1)
+    // Returns timeout error
+}
+
+#[test]
+#[ignore]
+fn sandbox_memory_limit_enforced() {
+    // Code that allocates >512MB → killed
+}
+
+#[test]
+#[ignore]
+fn sandbox_return_value_enters_context_not_raw_output() {
+    // execute_code that calls bash(long command)
+    // Tool result is the return value, not the bash output
+}
+
+#[test]
+#[ignore]
+fn sandbox_has_no_network_access_beyond_engine() {
+    // execute_code("import urllib.request; urllib.request.urlopen('http://example.com')")
+    // Fails — no network except engine socket
+}
+
+#[test]
+#[ignore]
+fn sandbox_ledger_append_from_code_closes_context_block() {
+    // execute_code("ledger_append('step', 'did the thing')")
+    // Engine detects step entry, closes context block
+}
+```
+
+### Then Implement
+- `docker/sandbox/` — Dockerfile, Python SDK
+- `src/engine/sandbox.rs` — container lifecycle, HTTP endpoint
+- `src/tools/sandbox.rs` — `execute_code` tool
 
 **Design doc:** [docs/engage.md](docs/engage.md) § 5
-**Done when:** A focus can call `execute_code` and the agent's Python code calls tools via the SDK.
 
 ---
 
-### Milestone 9: Skills System
+## Milestone 9: Skills System
 
-**Progressive discovery, runtime activation, autopoietic creation.**
+Depends on: M5a, M4.
 
-Depends on: Milestone 5a (engage loop), Milestone 4 (ledger — findings feed skill creation).
+### Tests First
 
-#### Phase 9a: Skill Discovery and Activation
+```rust
+// Phase 9a: Discovery and Activation
 
-| Task | Files | Estimate |
-|---|---|---|
-| `SKILL.md` frontmatter parser (YAML extraction) | `src/skills/parser.rs` | Small |
-| `SkillManager`: filesystem scan, catalog building | `src/skills/mod.rs` | Medium |
-| `discover_skills` tool | `src/tools/skills.rs` | Small |
-| `activate_skill` tool (inject prompt context) | `src/tools/skills.rs` | Medium |
-| Auto-activation during orient (trigger matching) | `src/engine/focus.rs` | Medium |
-| System prompt: skills catalog section | `src/engine/prompt.rs` | Small |
+#[test]
+fn skill_frontmatter_parses_from_yaml() {
+    // SKILL.md with YAML frontmatter
+    // Parses name, description, triggers, faculties, auto_activate
+}
 
-**Done when:** The engage loop can discover and activate skills from the filesystem.
+#[test]
+fn skill_manager_discovers_skills_from_directory() {
+    // skills/ dir with 3 skill directories
+    // SkillManager.catalog() → 3 entries with frontmatter
+}
 
-#### Phase 9b: Skill Creation (Autopoiesis)
+#[test]
+fn skill_trigger_matches_work_type() {
+    // Skill with triggers.work_types = ["engage"]
+    // matches("engage") → true, matches("analyze") → false
+}
 
-| Task | Files | Estimate |
-|---|---|---|
-| `create_skill` tool (writes SKILL.md to filesystem) | `src/tools/skills.rs` | Medium |
-| SQLx migration: `skill_activations`, `skill_provenance` tables | `migrations/..._skills.sql` | Small |
-| Activation tracking (Postgres) | `src/db/skills.rs` | Small |
-| Provenance tracking (ledger entry → skill content) | `src/db/skills.rs` | Medium |
-| Awareness digest: "skills updated" section | `src/engine/awareness.rs` | Small |
+#[test]
+fn skill_trigger_matches_keywords() {
+    // Skill with triggers.keywords = ["check in", "catch up"]
+    // matches_keywords("time to check in with Kelly") → true
+}
 
-**Done when:** A focus can create skills, and future foci can discover them. Provenance is tracked.
+#[test]
+fn skill_activation_returns_full_content() {
+    // Activate a skill → returns SKILL.md body + prompt.md content
+}
+
+#[test]
+fn auto_activate_respects_max_limit() {
+    // 10 skills all match, max_auto_activated = 3
+    // Only 3 activated
+}
+
+// Phase 9b: Autopoiesis
+
+#[test]
+fn create_skill_writes_valid_skill_md() {
+    // create_skill(name, description, faculties, content)
+    // Writes skills/{name}/SKILL.md with valid YAML frontmatter + body
+}
+
+#[test]
+fn created_skill_is_immediately_discoverable() {
+    // Create a skill, then discover_skills
+    // New skill appears in catalog
+}
+
+#[test]
+#[ignore]
+fn skill_activation_tracked_in_postgres() {
+    // Activate a skill during a focus
+    // skill_activations table has a row
+}
+
+#[test]
+#[ignore]
+fn skill_provenance_links_to_ledger_entries() {
+    // Create skill from ledger findings
+    // skill_provenance rows link to work_item_id and ledger_seq
+}
+```
+
+### Then Implement
+- `src/skills/parser.rs`, `src/skills/mod.rs` — parsing, discovery
+- `src/tools/skills.rs` — `discover_skills`, `activate_skill`, `create_skill`
+- Migration: `skill_activations`, `skill_provenance`
+- `src/db/skills.rs`
 
 **Design doc:** [docs/skills.md](docs/skills.md)
 
 ---
 
-### Milestone 10: Polish and Integration
+## Milestone 5d: Engage Hooks
 
-| Task | Estimate |
-|---|---|
-| OTel span hierarchy for full focus lifecycle (engage iterations, tool calls, sandbox, child work) | Medium |
-| Metrics: all counters/histograms from docs/engage.md and docs/ledger.md | Medium |
-| Faculty TOML: complete configuration surface from docs/engage.md | Small |
-| CLI: `animus status`, `animus work list`, `animus work show`, `animus ledger show` | Medium |
-| End-to-end test: full focus lifecycle with real LLM, ledger, tools, skills | Large |
-| Documentation: update CLAUDE.md with new modules | Small |
+Depends on: M5a.
+
+### Tests First
+
+```rust
+#[test]
+fn hook_discovery_finds_hooks_in_directory() {
+    // hooks/block-bash/HOOK.md with valid frontmatter
+    // HookManager discovers it
+}
+
+#[test]
+fn hook_before_llm_can_block() {
+    // Hook returns {"action": "block", "reason": "nope"}
+    // Engage loop exits with reason
+}
+
+#[test]
+fn hook_before_llm_can_patch_system_prompt() {
+    // Hook returns {"action": "allow", "patch": {"system_prompt": "new prompt"}}
+    // LLM call uses patched prompt
+}
+
+#[test]
+fn hook_before_tool_can_skip_tool() {
+    // Hook returns {"action": "block", "reason": "not allowed"}
+    // Tool not executed, error result injected
+}
+
+#[test]
+fn hook_after_tool_can_modify_result() {
+    // Hook returns {"action": "allow", "patch": {"content": "redacted"}}
+    // Tool result content replaced
+}
+
+#[test]
+fn hooks_run_in_priority_order() {
+    // Two hooks: priority 10 and priority 50
+    // Priority 10 runs first
+}
+
+#[test]
+fn hook_timeout_treated_as_allow() {
+    // Hook that sleeps beyond timeout_ms
+    // Treated as allow (not block)
+}
+```
+
+### Then Implement
+- `src/engine/hooks.rs`
+
+**Design doc:** [docs/engage.md](docs/engage.md) (hook sections throughout)
 
 ---
 
@@ -278,30 +755,41 @@ Depends on: Milestone 5a (engage loop), Milestone 4 (ledger — findings feed sk
 ```
 M3: LLM Client ─────────────┐
                               ├──→ M5a: Minimal Engage Loop ──→ M5b: Parallel Tools
-M4: Work Ledger ─────────────┘          │                          │
-                                        ├──→ M5c: Bounded Sub-Contexts
-                                        ├──→ M5d: Engage Hooks
+M4: Work Ledger ─────────────┘          │                    ──→ M5c: Bounded Sub-Contexts
+                                        │                    ──→ M5d: Engage Hooks
                                         ├──→ M6: Awareness Digest
                                         ├──→ M7: Child Work Items
                                         ├──→ M8: Code Execution Sandbox
                                         └──→ M9a: Skill Discovery ──→ M9b: Autopoiesis
-                                                                           │
-                                        M10: Polish ←─────────────────────┘
 ```
 
-M3 and M4 can proceed in parallel — they have no dependency on each other.
-M5a requires both M3 and M4.
-M5b, M5c, M5d, M6, M7, M8, M9a can proceed in parallel after M5a (they're independent).
-M9b requires M9a.
-M10 requires everything.
+M3 and M4 are parallel (no dependency on each other).
+M5a is the gate (requires both M3 and M4).
+Everything after M5a is parallelizable.
 
 ---
 
-## Principles for Execution
+## Execution Order (Recommended)
 
-1. **Test at every phase.** The engage loop is the heart of the system. No phase ships without tests.
-2. **Integration tests are ignored by default** (need Postgres / Docker / API keys). Unit tests always run.
-3. **One concern per PR.** Don't mix LLM client changes with ledger schema changes.
-4. **Design docs are authoritative.** Implementation follows the docs. If the implementation needs to diverge, update the doc first.
-5. **Smallest viable increment.** M5a is a minimal loop — sequential tools, no compaction, no sandbox. Get it working, then layer on complexity.
-6. **Pre-commit hook must pass.** `cargo fmt`, `cargo test`, `cargo clippy -D warnings`. No bypass.
+1. **M3 + M4 in parallel** — foundations, no external dependencies on each other
+2. **M5a** — minimal engage loop, the gate
+3. **M5b + M5c** — parallel tools and bounded sub-contexts (tightly related to engage)
+4. **M6** — awareness digest (high value for coherence, low implementation cost)
+5. **M7** — child work items (uses existing queue infrastructure)
+6. **M9a** — skill discovery (high value, moderate cost)
+7. **M5d** — engage hooks (important but not blocking other work)
+8. **M8** — code execution sandbox (highest implementation cost, can defer)
+9. **M9b** — autopoietic skill creation (builds on M9a + consolidate hook)
+
+---
+
+## Principles
+
+1. **Tests are the spec.** Write the test. Watch it fail. Make it pass. The test defines done.
+2. **No implementation without a failing test.** If you can't write a test for it, you don't understand it yet.
+3. **Unit tests always run.** No Postgres, no Docker, no API keys. Mock what you need.
+4. **Integration tests are ignored by default.** `cargo test` is fast. `cargo test -- --ignored` is thorough.
+5. **One concern per commit.** Don't mix LLM client with ledger schema.
+6. **Design docs are living.** If implementation reveals the design was wrong, update the doc. The test stays.
+7. **Smallest viable increment.** M5a is a sequential loop with two tools. Get it green, then layer.
+8. **Pre-commit hook must pass.** `cargo fmt` + `cargo test` + `cargo clippy -D warnings`. No bypass.
