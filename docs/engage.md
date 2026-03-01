@@ -4,7 +4,7 @@
 
 ## Context
 
-The engage phase is the heart of a focus — where the LLM reasons, calls tools, and iterates until the work is done. DESIGN.md establishes that the engage phase is a **built-in engine loop** configured by faculty TOML (model, system prompt, tools, max turns), not an external process. The ledger design (`docs/ledger.md`) establishes durable working memory in Postgres.
+The engage phase is the heart of a focus — where the LLM reasons, calls tools, and iterates until the work is done. DESIGN.md establishes that the engage phase is a **built-in engine loop** configured by faculty TOML (model, system prompt, tools, max turns), not an external process. The ledger design (`docs/ledger.md`) establishes durable working memory in Postgres. The skills design (`docs/skills.md`) covers how faculties discover and activate capabilities at runtime, including autopoietic skill creation.
 
 This document covers five interconnected concerns that shape how the engage loop actually works:
 
