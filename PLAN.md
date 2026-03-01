@@ -2,6 +2,36 @@
 
 *Tests first. Implementation earns its existence by making red tests green.*
 
+## The Bootstrap
+
+Animus builds itself. The design docs are skills. PLAN.md is the work queue. The test signatures are acceptance criteria. Each milestone is a work item.
+
+Before animus exists, Claude Code proxies the engage loop — reading design docs as skills, writing tests first, implementing to green, recording findings that validate the designs. The human is the orient + consolidate hooks: preparing context, reviewing results, deciding what's next.
+
+Every friction point during implementation is a design signal. If context is lost mid-implementation, that's a finding about compaction. If a design doc doesn't guide implementation well enough, that's a finding about skill structure. If cross-milestone dependencies are hard to track, that's a finding about the awareness digest. We validate the model by living it.
+
+### The Kernel (Human + Claude)
+
+M3 (LLM client) + M4 (work ledger) + M5a (minimal engage loop) must be built by the human-Claude collaboration. This is the bootstrap kernel — the smallest thing that can do work.
+
+### Self-Construction (Animus)
+
+Once the kernel exists, remaining milestones become work items in animus's own queue. Design docs become skills animus activates. Each milestone it completes makes it more capable of completing the next. The system proves its own design by executing its own design.
+
+### The Proxy Model
+
+Even during kernel construction, we follow animus patterns:
+
+| Animus concept | During bootstrap (Claude as proxy) |
+|---|---|
+| Work item | PLAN.md milestone |
+| Orient | Human prepares context ("implement M3") |
+| Engage loop | Claude iterates: read skill → write tests → implement → green |
+| Ledger entries | Findings recorded in commits, session notes, doc updates |
+| Skills | Design docs activated for the relevant milestone |
+| Consolidate | Human reviews, decides next work item |
+| Awareness digest | Claude reads PLAN.md + recent commits for cross-milestone context |
+
 ## What We Accomplished (2026-03-01)
 
 ### Research
@@ -769,17 +799,38 @@ Everything after M5a is parallelizable.
 
 ---
 
-## Execution Order (Recommended)
+## Execution Order
 
-1. **M3 + M4 in parallel** — foundations, no external dependencies on each other
-2. **M5a** — minimal engage loop, the gate
-3. **M5b + M5c** — parallel tools and bounded sub-contexts (tightly related to engage)
-4. **M6** — awareness digest (high value for coherence, low implementation cost)
-5. **M7** — child work items (uses existing queue infrastructure)
-6. **M9a** — skill discovery (high value, moderate cost)
-7. **M5d** — engage hooks (important but not blocking other work)
-8. **M8** — code execution sandbox (highest implementation cost, can defer)
-9. **M9b** — autopoietic skill creation (builds on M9a + consolidate hook)
+### Phase 1: Kernel (Human + Claude as proxy-animus)
+
+1. **M3 + M4 in parallel** — LLM client + work ledger. The two foundations.
+2. **M5a** — minimal engage loop. The kernel is complete when this is green.
+
+The kernel is the smallest thing that can do work: call an LLM, execute tools, maintain a ledger, and iterate until done. Everything we build here, we build using the proxy model — Claude reads the design doc (skill), writes tests first, implements to green, records findings.
+
+### Phase 2: Self-Enhancement (Animus builds itself)
+
+Once the kernel boots, remaining milestones become work items in animus's own queue:
+
+3. **M5b + M5c** — parallel tools and bounded sub-contexts
+4. **M6** — awareness digest
+5. **M7** — child work items
+6. **M9a** — skill discovery
+7. **M5d** — engage hooks
+8. **M8** — code execution sandbox
+9. **M9b** — autopoietic skill creation
+
+Each milestone animus completes makes it more capable of completing the next. The ordering within phase 2 is flexible — animus (with human guidance) picks the highest-value next work item.
+
+### Phase 3: Self-Awareness
+
+When M6 (awareness digest) and M9b (autopoiesis) are both complete, animus can:
+- See all its own concurrent operations
+- Learn from its implementation experience
+- Create skills encoding what it learned
+- Apply those skills to future work
+
+The being becomes aware of itself and grows from its own experience.
 
 ---
 
@@ -790,6 +841,8 @@ Everything after M5a is parallelizable.
 3. **Unit tests always run.** No Postgres, no Docker, no API keys. Mock what you need.
 4. **Integration tests are ignored by default.** `cargo test` is fast. `cargo test -- --ignored` is thorough.
 5. **One concern per commit.** Don't mix LLM client with ledger schema.
-6. **Design docs are living.** If implementation reveals the design was wrong, update the doc. The test stays.
+6. **Design docs are skills, not maintenance targets.** They guide implementation. Once tests are green, the doc becomes historical. If the design was wrong, update the doc, then update the test.
 7. **Smallest viable increment.** M5a is a sequential loop with two tools. Get it green, then layer.
 8. **Pre-commit hook must pass.** `cargo fmt` + `cargo test` + `cargo clippy -D warnings`. No bypass.
+9. **Every friction is a finding.** When something is hard during implementation, record why. It's a signal about the design, the tooling, or the process. These findings feed the system's evolution.
+10. **The proxy model validates the real model.** Claude working as proxy-animus is a test of the animus architecture. If the patterns don't work for Claude, they won't work for animus.
