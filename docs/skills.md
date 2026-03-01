@@ -1,3 +1,10 @@
+---
+status: active
+milestone: M9
+spec: PLAN.md § Milestone 9
+code: null
+---
+
 # Skills Architecture
 
 *Progressive discovery, runtime activation, and autopoietic evolution of agent capabilities.*

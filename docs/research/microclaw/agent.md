@@ -1,3 +1,9 @@
+---
+status: research
+date: 2026-03-01
+informed: docs/engage.md, docs/ledger.md
+---
+
 # MicroClaw Agent Loop — Deep Research
 
 > Source: `/Users/dothomps/src/ext/microclaw/` (v0.0.129, Rust 2021)

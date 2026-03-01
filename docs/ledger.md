@@ -1,3 +1,10 @@
+---
+status: active
+milestone: M4
+spec: PLAN.md § Milestone 4
+code: null
+---
+
 # Work Ledger Design
 
 *Durable working memory for the agentic loop, managed at the database layer.*

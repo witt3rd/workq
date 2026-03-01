@@ -1,3 +1,10 @@
+---
+status: active
+milestone: M3
+spec: PLAN.md § Milestone 3
+code: null
+---
+
 # LLM Abstraction Design
 
 *Thin, provider-specific HTTP clients for LLM completion calls. No framework, no agent runtime, no batteries.*

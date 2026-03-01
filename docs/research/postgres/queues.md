@@ -1,4 +1,8 @@
-<img src="https://r2cdn.perplexity.ai/pplx-full-logo-primary-dark%402x.png" style="height:64px;margin-right:32px"/>
+---
+status: research
+date: 2026-02-27
+informed: docs/db.md
+---
 
 # does postgres support queues
 

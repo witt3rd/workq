@@ -1,3 +1,11 @@
+---
+status: archived
+milestone: M1
+implemented: 2026-02-27
+spec: tests/db_test.rs, tests/work_test.rs, tests/memory_test.rs, tests/pgmq_test.rs
+code: src/db/, src/model/, src/memory/
+---
+
 # animus-rs: Database Layer Design
 
 ## Context

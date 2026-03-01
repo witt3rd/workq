@@ -1,3 +1,10 @@
+---
+status: active
+milestone: M5, M6, M7, M8
+spec: PLAN.md § Milestones 5-8
+code: null
+---
+
 # Engage Phase Architecture
 
 *The agentic loop, its execution model, and cross-faculty coherence.*
