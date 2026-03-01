@@ -64,3 +64,12 @@ pub fn llm_tokens() -> Counter<u64> {
         .with_description("LLM token usage")
         .build()
 }
+
+/// Counter: work items skipped because no faculty handles the work type.
+/// Labels: `work_type`.
+pub fn work_unroutable() -> Counter<u64> {
+    meter()
+        .u64_counter("animus.work.unroutable")
+        .with_description("Work items with no matching faculty")
+        .build()
+}

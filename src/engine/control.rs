@@ -4,7 +4,11 @@ use crate::db::Db;
 use crate::error::{Error, Result};
 use crate::faculty::FacultyRegistry;
 use crate::model::work::{Outcome, State, WorkId};
-use crate::telemetry::work::{record_state_transition, start_work_span};
+use crate::telemetry::{
+    metrics,
+    work::{record_state_transition, start_work_span},
+};
+use opentelemetry::KeyValue;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -166,7 +170,13 @@ impl ControlPlane {
                     // No faculty registered for this work type. Leave the message
                     // in the queue — the visibility timeout will make it reappear.
                     // A faculty may be registered later (e.g., during bootstrap).
-                    info!(work_type = %item.work_type, "no faculty for work type, skipping (will retry after visibility timeout)");
+                    warn!(
+                        work_type = %item.work_type,
+                        work_id = %work_item_id,
+                        "no faculty for work type, skipping (will retry after visibility timeout)"
+                    );
+                    metrics::work_unroutable()
+                        .add(1, &[KeyValue::new("work_type", item.work_type.clone())]);
                     return Ok(());
                 }
             };

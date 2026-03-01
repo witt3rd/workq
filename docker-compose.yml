@@ -76,6 +76,7 @@ services:
     image: grafana/grafana:latest
     volumes:
       - ./docker/grafana/datasources.yml:/etc/grafana/provisioning/datasources/datasources.yml
+      - ./docker/grafana/alerting:/etc/grafana/provisioning/alerting
       - ${ANIMUS_HOME:-~/.animus}/data/${ANIMUS_INSTANCE:-dev}/grafana:/var/lib/grafana
     environment:
       GF_SECURITY_ADMIN_PASSWORD: admin

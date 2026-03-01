@@ -1,0 +1,42 @@
+apiVersion: 1
+
+groups:
+  - orgId: 1
+    name: animus-work
+    folder: Animus
+    interval: 1m
+    rules:
+      - uid: unroutable-work
+        title: Work with no faculty
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 300
+              to: 0
+            datasourceUid: prometheus
+            model:
+              expr: increase(animus_work_unroutable_total[5m])
+              instant: true
+              refId: A
+          - refId: C
+            relativeTimeRange:
+              from: 300
+              to: 0
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator:
+                    type: gt
+                    params:
+                      - 0
+              refId: C
+        noDataState: OK
+        execErrState: Alerting
+        for: 0s
+        annotations:
+          summary: "Work items are being submitted with work types that no faculty handles. They will sit in the queue until a faculty is registered."
+        labels:
+          severity: warning
