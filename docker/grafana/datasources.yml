@@ -37,3 +37,17 @@ datasources:
     type: prometheus
     access: proxy
     url: http://prometheus:9090
+
+  - name: Animus Postgres
+    type: postgres
+    access: proxy
+    url: postgres:5432
+    user: animus
+    secureJsonData:
+      password: animus_dev
+    jsonData:
+      database: animus_dev
+      sslmode: disable
+      maxOpenConns: 5
+      maxIdleConns: 2
+      connMaxLifetime: 14400
