@@ -17,11 +17,13 @@ pub struct WorkItem {
     /// Unique identifier.
     pub id: WorkId,
 
-    /// What kind of work this is (e.g., "engage", "project-check").
-    /// Determines which worker handles it and capacity accounting.
-    pub work_type: String,
+    /// Which faculty handles this work (e.g., "engineer", "social").
+    pub faculty: String,
 
-    /// Structural dedup key. Work items with the same (work_type, dedup_key)
+    /// Which skill drives the methodology (e.g., "tdd-implementation").
+    pub skill: Option<String>,
+
+    /// Structural dedup key. Work items with the same (faculty, dedup_key)
     /// are candidates for dedup. None means no structural dedup.
     pub dedup_key: Option<String>,
 
@@ -202,7 +204,8 @@ pub struct Outcome {
 
 /// Builder for creating new work items. The engine's public API for submitting work.
 pub struct NewWorkItem {
-    pub(crate) work_type: String,
+    pub(crate) faculty: String,
+    pub(crate) skill: Option<String>,
     pub(crate) dedup_key: Option<String>,
     pub(crate) provenance: Provenance,
     pub(crate) params: serde_json::Value,
@@ -212,9 +215,10 @@ pub struct NewWorkItem {
 }
 
 impl NewWorkItem {
-    pub fn new(work_type: impl Into<String>, source: impl Into<String>) -> Self {
+    pub fn new(faculty: impl Into<String>, source: impl Into<String>) -> Self {
         Self {
-            work_type: work_type.into(),
+            faculty: faculty.into(),
+            skill: None,
             dedup_key: None,
             provenance: Provenance {
                 source: source.into(),
@@ -225,6 +229,11 @@ impl NewWorkItem {
             parent_id: None,
             max_attempts: None,
         }
+    }
+
+    pub fn skill(mut self, skill: impl Into<String>) -> Self {
+        self.skill = Some(skill.into());
+        self
     }
 
     pub fn dedup_key(mut self, key: impl Into<String>) -> Self {

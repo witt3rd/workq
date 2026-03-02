@@ -1,10 +1,7 @@
 [faculty]
 name = "engineer"
-accepts = ["implement", "fix", "refactor", "test"]
-max_concurrent = 1
-
-[faculty.orient]
-command = "scripts/engineer/orient.sh"
+concurrent = true
+isolation = "worktree"
 
 [faculty.engage]
 command = "scripts/engineer/engage.sh"

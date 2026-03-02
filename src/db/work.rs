@@ -39,18 +39,19 @@ impl super::Db {
 
         if let Some(ref dedup_key) = new.dedup_key {
             // Attempt insert with ON CONFLICT for dedup-enabled items.
-            // The unique partial index on (work_type, dedup_key) prevents
+            // The unique partial index on (faculty, dedup_key) prevents
             // concurrent inserts with the same key for active items.
             let inserted: Option<(Uuid,)> = sqlx::query_as(
-                "INSERT INTO work_items (id, queue_name, work_type, dedup_key, source, trigger_info, params, priority, state, parent_id, max_attempts, created_at, updated_at)
-                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $12)
-                 ON CONFLICT (work_type, dedup_key) WHERE dedup_key IS NOT NULL AND state NOT IN ('completed', 'dead', 'merged')
+                "INSERT INTO work_items (id, queue_name, faculty, skill, dedup_key, source, trigger_info, params, priority, state, parent_id, max_attempts, created_at, updated_at)
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $13)
+                 ON CONFLICT (faculty, dedup_key) WHERE dedup_key IS NOT NULL AND state NOT IN ('completed', 'dead', 'merged')
                  DO NOTHING
                  RETURNING id",
             )
             .bind(id)
             .bind("work")
-            .bind(&new.work_type)
+            .bind(&new.faculty)
+            .bind(&new.skill)
             .bind(dedup_key)
             .bind(&new.provenance.source)
             .bind(&new.provenance.trigger)
@@ -67,11 +68,11 @@ impl super::Db {
                 // Conflict: a duplicate exists. Find the canonical item.
                 let canonical: (Uuid,) = sqlx::query_as(
                     "SELECT id FROM work_items
-                     WHERE work_type = $1 AND dedup_key = $2
+                     WHERE faculty = $1 AND dedup_key = $2
                      AND state NOT IN ('completed', 'dead', 'merged')
                      LIMIT 1",
                 )
-                .bind(&new.work_type)
+                .bind(&new.faculty)
                 .bind(dedup_key)
                 .fetch_one(&mut *tx)
                 .await?;
@@ -80,12 +81,13 @@ impl super::Db {
                 // conflicting with the unique index).
                 validate_transition(State::Created, State::Merged)?;
                 sqlx::query(
-                    "INSERT INTO work_items (id, queue_name, work_type, dedup_key, source, trigger_info, params, priority, state, merged_into, parent_id, max_attempts, created_at, updated_at, resolved_at)
-                     VALUES ($1, $2, $3, NULL, $4, $5, $6, $7, 'merged', $8, $9, $10, $11, $11, $11)",
+                    "INSERT INTO work_items (id, queue_name, faculty, skill, dedup_key, source, trigger_info, params, priority, state, merged_into, parent_id, max_attempts, created_at, updated_at, resolved_at)
+                     VALUES ($1, $2, $3, $4, NULL, $5, $6, $7, $8, 'merged', $9, $10, $11, $12, $12, $12)",
                 )
                 .bind(id)
                 .bind("work")
-                .bind(&new.work_type)
+                .bind(&new.faculty)
+                .bind(&new.skill)
                 .bind(&new.provenance.source)
                 .bind(&new.provenance.trigger)
                 .bind(&new.params)
@@ -101,7 +103,7 @@ impl super::Db {
                 metrics::work_submitted().add(
                     1,
                     &[
-                        KeyValue::new("work_type", new.work_type.clone()),
+                        KeyValue::new("faculty", new.faculty.clone()),
                         KeyValue::new("result", "duplicate"),
                     ],
                 );
@@ -113,12 +115,13 @@ impl super::Db {
         } else {
             // No dedup key — straight insert, no conflict possible
             sqlx::query(
-                "INSERT INTO work_items (id, queue_name, work_type, dedup_key, source, trigger_info, params, priority, state, parent_id, max_attempts, created_at, updated_at)
-                 VALUES ($1, $2, $3, NULL, $4, $5, $6, $7, $8, $9, $10, $11, $11)",
+                "INSERT INTO work_items (id, queue_name, faculty, skill, dedup_key, source, trigger_info, params, priority, state, parent_id, max_attempts, created_at, updated_at)
+                 VALUES ($1, $2, $3, $4, NULL, $5, $6, $7, $8, $9, $10, $11, $12, $12)",
             )
             .bind(id)
             .bind("work")
-            .bind(&new.work_type)
+            .bind(&new.faculty)
+            .bind(&new.skill)
             .bind(&new.provenance.source)
             .bind(&new.provenance.trigger)
             .bind(&new.params)
@@ -156,7 +159,7 @@ impl super::Db {
 
         // NOTIFY is transactional — only fires on commit
         sqlx::query("SELECT pg_notify('work_ready', $1)")
-            .bind(&new.work_type)
+            .bind(&new.faculty)
             .execute(&mut *tx)
             .await?;
 
@@ -165,7 +168,7 @@ impl super::Db {
         metrics::work_submitted().add(
             1,
             &[
-                KeyValue::new("work_type", new.work_type),
+                KeyValue::new("faculty", new.faculty),
                 KeyValue::new("result", "ok"),
             ],
         );
@@ -178,15 +181,15 @@ impl super::Db {
     pub async fn list_work_items(
         &self,
         state: Option<State>,
-        work_type: Option<&str>,
+        faculty: Option<&str>,
         limit: i64,
     ) -> Result<Vec<WorkItem>> {
         // Build query dynamically based on filters
-        let rows: Vec<WorkItemRow> = match (state, work_type) {
+        let rows: Vec<WorkItemRow> = match (state, faculty) {
             (Some(s), Some(wt)) => {
                 sqlx::query_as(
-                    "SELECT id, work_type, dedup_key, source, trigger_info, params, priority, state, merged_into, parent_id, attempts, max_attempts, created_at, updated_at, resolved_at, outcome_data, outcome_error, outcome_ms
-                     FROM work_items WHERE state = $1 AND work_type = $2
+                    "SELECT id, faculty, skill, dedup_key, source, trigger_info, params, priority, state, merged_into, parent_id, attempts, max_attempts, created_at, updated_at, resolved_at, outcome_data, outcome_error, outcome_ms
+                     FROM work_items WHERE state = $1 AND faculty = $2
                      ORDER BY created_at DESC LIMIT $3",
                 )
                 .bind(s.to_string())
@@ -197,7 +200,7 @@ impl super::Db {
             }
             (Some(s), None) => {
                 sqlx::query_as(
-                    "SELECT id, work_type, dedup_key, source, trigger_info, params, priority, state, merged_into, parent_id, attempts, max_attempts, created_at, updated_at, resolved_at, outcome_data, outcome_error, outcome_ms
+                    "SELECT id, faculty, skill, dedup_key, source, trigger_info, params, priority, state, merged_into, parent_id, attempts, max_attempts, created_at, updated_at, resolved_at, outcome_data, outcome_error, outcome_ms
                      FROM work_items WHERE state = $1
                      ORDER BY created_at DESC LIMIT $2",
                 )
@@ -208,8 +211,8 @@ impl super::Db {
             }
             (None, Some(wt)) => {
                 sqlx::query_as(
-                    "SELECT id, work_type, dedup_key, source, trigger_info, params, priority, state, merged_into, parent_id, attempts, max_attempts, created_at, updated_at, resolved_at, outcome_data, outcome_error, outcome_ms
-                     FROM work_items WHERE work_type = $1
+                    "SELECT id, faculty, skill, dedup_key, source, trigger_info, params, priority, state, merged_into, parent_id, attempts, max_attempts, created_at, updated_at, resolved_at, outcome_data, outcome_error, outcome_ms
+                     FROM work_items WHERE faculty = $1
                      ORDER BY created_at DESC LIMIT $2",
                 )
                 .bind(wt)
@@ -219,7 +222,7 @@ impl super::Db {
             }
             (None, None) => {
                 sqlx::query_as(
-                    "SELECT id, work_type, dedup_key, source, trigger_info, params, priority, state, merged_into, parent_id, attempts, max_attempts, created_at, updated_at, resolved_at, outcome_data, outcome_error, outcome_ms
+                    "SELECT id, faculty, skill, dedup_key, source, trigger_info, params, priority, state, merged_into, parent_id, attempts, max_attempts, created_at, updated_at, resolved_at, outcome_data, outcome_error, outcome_ms
                      FROM work_items
                      ORDER BY created_at DESC LIMIT $1",
                 )
@@ -235,7 +238,7 @@ impl super::Db {
     /// Get a work item by ID.
     pub async fn get_work_item(&self, id: WorkId) -> Result<WorkItem> {
         let row: Option<WorkItemRow> = sqlx::query_as(
-            "SELECT id, work_type, dedup_key, source, trigger_info, params, priority, state, merged_into, parent_id, attempts, max_attempts, created_at, updated_at, resolved_at, outcome_data, outcome_error, outcome_ms
+            "SELECT id, faculty, skill, dedup_key, source, trigger_info, params, priority, state, merged_into, parent_id, attempts, max_attempts, created_at, updated_at, resolved_at, outcome_data, outcome_error, outcome_ms
              FROM work_items WHERE id = $1",
         )
         .bind(id.0)
@@ -372,7 +375,8 @@ impl super::Db {
 #[derive(sqlx::FromRow)]
 struct WorkItemRow {
     id: Uuid,
-    work_type: String,
+    faculty: String,
+    skill: Option<String>,
     dedup_key: Option<String>,
     source: String,
     trigger_info: Option<String>,
@@ -406,7 +410,8 @@ impl WorkItemRow {
 
         Ok(WorkItem {
             id: WorkId(self.id),
-            work_type: self.work_type,
+            faculty: self.faculty,
+            skill: self.skill,
             dedup_key: self.dedup_key,
             provenance: Provenance {
                 source: self.source,

@@ -54,11 +54,15 @@ impl Focus {
     pub async fn run(&self, faculty: &FacultyMeta) -> FocusResult {
         let start = Instant::now();
 
-        let phases = [
-            ("orient", &faculty.orient.command),
-            ("engage", &faculty.engage.command),
-            ("consolidate", &faculty.consolidate.command),
-        ];
+        // Build phase list — orient and consolidate are optional
+        let mut phases: Vec<(&str, &PathBuf)> = Vec::new();
+        if let Some(ref orient) = faculty.orient {
+            phases.push(("orient", &orient.command));
+        }
+        phases.push(("engage", &faculty.engage.command));
+        if let Some(ref consolidate) = faculty.consolidate {
+            phases.push(("consolidate", &consolidate.command));
+        }
 
         for (phase, command) in &phases {
             let phase_start = Instant::now();
@@ -90,8 +94,12 @@ impl Focus {
             }
         }
 
-        // Read consolidate output for outcome data
-        let outcome_path = self.dir.join("consolidate-out.json");
+        // Read outcome data — prefer consolidate-out.json, fall back to engage-out.json
+        let outcome_path = if self.dir.join("consolidate-out.json").exists() {
+            self.dir.join("consolidate-out.json")
+        } else {
+            self.dir.join("engage-out.json")
+        };
         match tokio::fs::read_to_string(&outcome_path).await {
             Ok(content) => match serde_json::from_str(&content) {
                 Ok(data) => FocusResult::Completed {
@@ -133,7 +141,7 @@ impl Focus {
         let status = Command::new(&abs_command)
             .current_dir(&self.dir)
             .env("ANIMUS_FOCUS_DIR", &self.dir)
-            .env("ANIMUS_WORK_TYPE", &self.work_item.work_type)
+            .env("ANIMUS_FACULTY", &self.work_item.faculty)
             .env("ANIMUS_WORK_ID", self.work_item.id.0.to_string())
             .env("ANIMUS_PHASE", phase)
             .status()

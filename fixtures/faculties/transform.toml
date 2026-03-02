@@ -1,7 +1,6 @@
 [faculty]
 name = "transform"
-accepts = ["transform"]
-max_concurrent = 2
+concurrent = false
 
 [faculty.orient]
 command = "fixtures/scripts/orient.sh"

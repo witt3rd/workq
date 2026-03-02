@@ -103,14 +103,14 @@ fn smoke_metrics() {
         counter.add(
             1,
             &[
-                KeyValue::new("work_type", "smoke"),
+                KeyValue::new("faculty", "smoke"),
                 KeyValue::new("result", "ok"),
             ],
         );
         counter.add(
             1,
             &[
-                KeyValue::new("work_type", "smoke"),
+                KeyValue::new("faculty", "smoke"),
                 KeyValue::new("result", "ok"),
             ],
         );
@@ -244,7 +244,7 @@ fn smoke_full_lifecycle() {
         submitted.add(
             1,
             &[
-                KeyValue::new("work_type", "full-lifecycle"),
+                KeyValue::new("faculty", "full-lifecycle"),
                 KeyValue::new("result", "ok"),
             ],
         );
@@ -302,7 +302,7 @@ fn smoke_full_lifecycle() {
         );
 
         // Logs: various levels
-        tracing::info!(work_id = %work_id, work_type = "full-lifecycle", "work item submitted");
+        tracing::info!(work_id = %work_id, faculty = "full-lifecycle", "work item submitted");
         tracing::info!(work_id = %work_id, "state transition: created -> completed");
         tracing::warn!(work_id = %work_id, "simulated warning during lifecycle");
 

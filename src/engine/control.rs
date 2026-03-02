@@ -159,24 +159,24 @@ impl ControlPlane {
         let item = self.db.get_work_item(work_id).await?;
 
         // Create a work execution span that wraps the entire lifecycle
-        let work_span = start_work_span(&item.work_type, &work_item_id);
+        let work_span = start_work_span(&item.faculty, &work_item_id);
 
         // Everything from routing through retirement runs inside the work span
         async {
-            // Route to faculty
-            let faculty = match self.registry.faculty_for_work_type(&item.work_type) {
+            // Dispatch to the faculty named in the work item
+            let faculty = match self.registry.get(&item.faculty) {
                 Some(f) => f.clone(),
                 None => {
-                    // No faculty registered for this work type. Leave the message
+                    // No faculty registered with this name. Leave the message
                     // in the queue — the visibility timeout will make it reappear.
-                    // A faculty may be registered later (e.g., during bootstrap).
+                    // The faculty may be registered later (e.g., during bootstrap).
                     warn!(
-                        work_type = %item.work_type,
+                        faculty = %item.faculty,
                         work_id = %work_item_id,
-                        "no faculty for work type, skipping (will retry after visibility timeout)"
+                        "no faculty registered, skipping (will retry after visibility timeout)"
                     );
                     metrics::work_unroutable()
-                        .add(1, &[KeyValue::new("work_type", item.work_type.clone())]);
+                        .add(1, &[KeyValue::new("faculty", item.faculty.clone())]);
                     return Ok(());
                 }
             };

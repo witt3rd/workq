@@ -40,10 +40,13 @@ enum Command {
 enum WorkAction {
     /// Submit a new work item
     Submit {
-        /// Work type (determines faculty routing)
-        work_type: String,
+        /// Which faculty handles this work
+        faculty: String,
         /// Provenance source
         source: String,
+        /// Skill that drives the methodology
+        #[arg(long)]
+        skill: Option<String>,
         /// Structural dedup key
         #[arg(long)]
         dedup_key: Option<String>,
@@ -62,9 +65,9 @@ enum WorkAction {
         /// Filter by state
         #[arg(long)]
         state: Option<String>,
-        /// Filter by work type
-        #[arg(long, name = "type")]
-        work_type: Option<String>,
+        /// Filter by faculty
+        #[arg(long)]
+        faculty: Option<String>,
         /// Maximum items to show
         #[arg(long, default_value_t = 20)]
         limit: i64,
@@ -94,21 +97,24 @@ async fn main() -> anyhow::Result<()> {
 
             match action {
                 WorkAction::Submit {
-                    work_type,
+                    faculty,
                     source,
+                    skill,
                     dedup_key,
                     trigger,
                     params,
                     priority,
                 } => {
-                    cmd_work_submit(&db, work_type, source, dedup_key, trigger, params, priority)
-                        .await
+                    cmd_work_submit(
+                        &db, faculty, source, skill, dedup_key, trigger, params, priority,
+                    )
+                    .await
                 }
                 WorkAction::List {
                     state,
-                    work_type,
+                    faculty,
                     limit,
-                } => cmd_work_list(&db, state, work_type, limit).await,
+                } => cmd_work_list(&db, state, faculty, limit).await,
                 WorkAction::Show { id } => cmd_work_show(&db, id).await,
             }
         }
@@ -146,10 +152,12 @@ async fn cmd_serve(faculties: PathBuf, max_concurrent: usize) -> anyhow::Result<
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn cmd_work_submit(
     db: &Db,
-    work_type: String,
+    faculty: String,
     source: String,
+    skill: Option<String>,
     dedup_key: Option<String>,
     trigger: Option<String>,
     params: Option<String>,
@@ -160,10 +168,13 @@ async fn cmd_work_submit(
         None => serde_json::json!({}),
     };
 
-    let mut new = NewWorkItem::new(&work_type, &source)
+    let mut new = NewWorkItem::new(&faculty, &source)
         .params(params)
         .priority(priority);
 
+    if let Some(ref s) = skill {
+        new = new.skill(s);
+    }
     if let Some(ref key) = dedup_key {
         new = new.dedup_key(key);
     }
@@ -191,7 +202,7 @@ async fn cmd_work_submit(
 async fn cmd_work_list(
     db: &Db,
     state: Option<String>,
-    work_type: Option<String>,
+    faculty: Option<String>,
     limit: i64,
 ) -> anyhow::Result<()> {
     let state_filter: Option<State> = match state {
@@ -203,7 +214,7 @@ async fn cmd_work_list(
     };
 
     let items = db
-        .list_work_items(state_filter, work_type.as_deref(), limit)
+        .list_work_items(state_filter, faculty.as_deref(), limit)
         .await?;
 
     if items.is_empty() {
@@ -213,26 +224,26 @@ async fn cmd_work_list(
 
     // Header
     println!(
-        "{:<8}  {:<12}  {:<10}  {:<4}  {:<30}  CREATED",
-        "ID", "TYPE", "STATE", "PRI", "DEDUP_KEY"
+        "{:<8}  {:<12}  {:<20}  {:<10}  {:<4}  CREATED",
+        "ID", "FACULTY", "SKILL", "STATE", "PRI"
     );
-    println!("{}", "-".repeat(100));
+    println!("{}", "-".repeat(90));
 
     for item in &items {
         let short_id = &item.id.to_string()[..8];
-        let dedup = item.dedup_key.as_deref().unwrap_or("-");
-        let dedup_display = if dedup.len() > 30 {
-            &dedup[..30]
+        let skill = item.skill.as_deref().unwrap_or("-");
+        let skill_display = if skill.len() > 20 {
+            &skill[..20]
         } else {
-            dedup
+            skill
         };
         println!(
-            "{:<8}  {:<12}  {:<10}  {:<4}  {:<30}  {}",
+            "{:<8}  {:<12}  {:<20}  {:<10}  {:<4}  {}",
             short_id,
-            item.work_type,
+            item.faculty,
+            skill_display,
             item.state,
             item.priority,
-            dedup_display,
             item.created_at.format("%Y-%m-%d %H:%M")
         );
     }
@@ -263,7 +274,8 @@ async fn cmd_work_show(db: &Db, id_str: String) -> anyhow::Result<()> {
     let item = db.get_work_item(id).await?;
 
     println!("ID:         {}", item.id);
-    println!("Type:       {}", item.work_type);
+    println!("Faculty:    {}", item.faculty);
+    println!("Skill:      {}", item.skill.as_deref().unwrap_or("-"));
     println!("State:      {}", item.state);
     println!("Priority:   {}", item.priority);
     println!("Dedup Key:  {}", item.dedup_key.as_deref().unwrap_or("-"));

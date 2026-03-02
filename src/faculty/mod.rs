@@ -1,8 +1,7 @@
 //! Faculty configuration and registry.
 //!
-//! A faculty is a pluggable cognitive specialization — it knows which work
-//! types it handles and which external commands implement each phase of the
-//! orient → engage → consolidate → recover pipeline.
+//! A faculty is a pluggable cognitive specialization. The work item specifies
+//! which faculty handles it directly — no routing table needed.
 
 use crate::error::{Error, Result};
 use serde::Deserialize;
@@ -19,11 +18,13 @@ struct FacultyConfig {
 #[derive(Debug, Clone, Deserialize)]
 pub struct FacultyMeta {
     pub name: String,
-    pub accepts: Vec<String>,
-    pub max_concurrent: usize,
-    pub orient: HookConfig,
+    #[serde(default)]
+    pub concurrent: bool,
+    #[serde(default)]
+    pub isolation: Option<String>,
+    pub orient: Option<HookConfig>,
     pub engage: HookConfig,
-    pub consolidate: HookConfig,
+    pub consolidate: Option<HookConfig>,
     pub recover: RecoverConfig,
 }
 
@@ -40,10 +41,9 @@ pub struct RecoverConfig {
     pub max_attempts: u32,
 }
 
-/// Registry of loaded faculties, indexed by name and work type.
+/// Registry of loaded faculties, indexed by name.
 pub struct FacultyRegistry {
     faculties: HashMap<String, FacultyMeta>,
-    work_type_index: HashMap<String, String>,
 }
 
 impl FacultyRegistry {
@@ -51,14 +51,12 @@ impl FacultyRegistry {
     pub fn empty() -> Self {
         Self {
             faculties: HashMap::new(),
-            work_type_index: HashMap::new(),
         }
     }
 
     /// Load all `.toml` files from a directory and build the registry.
     pub fn load_from_dir(dir: &Path) -> Result<Self> {
         let mut faculties = HashMap::new();
-        let mut work_type_index = HashMap::new();
 
         let entries = std::fs::read_dir(dir).map_err(|e| {
             Error::Config(format!("cannot read faculty dir {}: {e}", dir.display()))
@@ -73,23 +71,15 @@ impl FacultyRegistry {
                     Error::Config(format!("bad faculty config {}: {e}", path.display()))
                 })?;
                 let meta = config.faculty;
-                for wt in &meta.accepts {
-                    work_type_index.insert(wt.clone(), meta.name.clone());
-                }
                 faculties.insert(meta.name.clone(), meta);
             }
         }
 
-        Ok(Self {
-            faculties,
-            work_type_index,
-        })
+        Ok(Self { faculties })
     }
 
-    /// Look up the faculty that handles a given work type.
-    pub fn faculty_for_work_type(&self, work_type: &str) -> Option<&FacultyMeta> {
-        self.work_type_index
-            .get(work_type)
-            .and_then(|name| self.faculties.get(name))
+    /// Look up a faculty by name.
+    pub fn get(&self, name: &str) -> Option<&FacultyMeta> {
+        self.faculties.get(name)
     }
 }

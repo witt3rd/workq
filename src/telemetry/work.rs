@@ -10,10 +10,10 @@ use uuid::Uuid;
 ///
 /// The `work.state` field is declared empty and can be updated via
 /// [`record_state_transition`].
-pub fn start_work_span(work_type: &str, work_id: &Uuid) -> Span {
+pub fn start_work_span(faculty: &str, work_id: &Uuid) -> Span {
     tracing::info_span!(
         "work.execute",
-        "work.type" = work_type,
+        "work.faculty" = faculty,
         "work.id" = %work_id,
         "work.state" = tracing::field::Empty,
     )
