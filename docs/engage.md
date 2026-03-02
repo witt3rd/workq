@@ -200,7 +200,7 @@ When the agent needs to delegate:
 ```
 Parent focus (work_item A, state: running)
   → ledger_append(step: "Delegating config analysis")
-  → tool call: spawn_child_work(work_type: "analyze", params: {...})
+  → tool call: spawn_child_work(faculty: "analyze", params: {...})
   → engine creates child work_item B (parent_id = A)
   → child B enters the queue: Created → Queued → Claimed → Running
   → child B gets its own focus, own engage loop, own ledger, own context window
@@ -214,7 +214,7 @@ This gives us everything MicroClaw's sub-agent provides, plus:
 - **Bounded context for free** — the child has its own message history, its own ledger, its own context window. Zero context pollution of the parent.
 - **Async execution** — the parent can spawn multiple children and continue working (or wait)
 - **Same infrastructure** — work queue, ledger, OTel tracing, consolidate/recover hooks — it's all the same system
-- **Faculty routing** — child work can be routed to a different faculty. The parent (Social) spawns work for the child (Computer Use) based on `work_type`. The control plane routes it like any other work item.
+- **Faculty routing** — child work can be routed to a different faculty. The parent (Social) spawns work for the child (Computer Use) based on `faculty`. The control plane routes it like any other work item.
 - **Observability** — child work items link to the parent via `parent_id`. Traces link via span context. Each ledger is independently queryable. Grafana can render the parent-child tree.
 
 ### Agent Tools
@@ -230,7 +230,7 @@ Three tools for child work management:
   "input_schema": {
     "type": "object",
     "properties": {
-      "work_type": {
+      "faculty": {
         "type": "string",
         "description": "The type of work. Determines which faculty handles it."
       },
@@ -247,7 +247,7 @@ Three tools for child work management:
         "description": "Priority (higher = more urgent). Default: same as parent."
       }
     },
-    "required": ["work_type", "description"]
+    "required": ["faculty", "description"]
   }
 }
 ```
@@ -381,7 +381,7 @@ What's happening right now, concurrently with this focus?
 ```sql
 SELECT
     w.id,
-    w.work_type,
+    w.faculty,
     w.params->>'description' AS description,
     (SELECT wl.content FROM work_ledger wl
      WHERE wl.work_item_id = w.id AND wl.entry_type = 'plan'
@@ -398,7 +398,7 @@ What finished recently? What outcomes were produced?
 
 ```sql
 SELECT
-    w.work_type,
+    w.faculty,
     w.params->>'description' AS description,
     w.outcome_data->>'summary' AS outcome_summary,
     w.resolved_at
@@ -415,7 +415,7 @@ What has the system learned recently, across all faculties?
 
 ```sql
 SELECT
-    w.work_type,
+    w.faculty,
     wl.content,
     wl.created_at
 FROM work_ledger wl
@@ -460,7 +460,7 @@ This is a default behavior — every focus gets peripheral awareness unless the 
 ```toml
 [faculty]
 name = "social"
-accepts = ["engage", "respond", "check-in"]
+concurrent = false
 
 [faculty.awareness]
 enabled = true              # default: true
@@ -686,7 +686,7 @@ def glob(pattern: str, path: str = ".") -> list[str]: ...
 def web_fetch(url: str, prompt: str = None) -> str: ...
 def ledger_append(entry_type: str, content: str) -> dict: ...
 def ledger_read(entry_type: str = None, last_n: int = None) -> list[dict]: ...
-def spawn_child_work(work_type: str, description: str, params: dict = None) -> str: ...
+def spawn_child_work(faculty: str, description: str, params: dict = None) -> str: ...
 def check_child_work(work_item_ids: list[str]) -> list[dict]: ...
 ```
 
@@ -891,7 +891,7 @@ Combining engage, ledger, and awareness configuration:
 ```toml
 [faculty]
 name = "social"
-accepts = ["engage", "respond", "check-in"]
+concurrent = false
 concurrent = false          # social foci share relational state, don't parallelize
 
 [faculty.orient]
@@ -1049,7 +1049,7 @@ Child work items create separate trace trees linked via `parent_id`. Grafana can
 | `work.engage.parallel_tools` | Histogram | faculty | Tool calls per parallel batch |
 | `work.context.blocks_closed` | Counter | faculty | Context blocks closed via step entries |
 | `work.context.blocks_truncated` | Counter | faculty | Closed blocks actually truncated |
-| `work.child.spawned` | Counter | faculty, child_work_type | Child work items spawned |
+| `work.child.spawned` | Counter | faculty, child_faculty | Child work items spawned |
 | `work.child.await_duration` | Histogram | faculty | Time spent waiting for children |
 | `work.awareness.digest_size` | Histogram | faculty | Token count of awareness digest |
 | `work.awareness.digest_latency` | Histogram | — | Time to assemble digest (SQL query) |
@@ -1070,7 +1070,7 @@ Child work items create separate trace trees linked via `parent_id`. Grafana can
 
 - **Child work priority inheritance.** Should children inherit the parent's priority by default? Probably yes, with an override. A high-priority parent spawning low-priority analysis work is a valid pattern.
 
-- **Circular child delegation.** What prevents work_type A from spawning a child of work_type B which spawns a child of work_type A? The `parent_id` chain can be checked at spawn time, but how deep? A simple depth limit (e.g., max 5 levels) is probably sufficient.
+- **Circular child delegation.** What prevents faculty A from spawning a child of faculty B which spawns a child of faculty A? The `parent_id` chain can be checked at spawn time, but how deep? A simple depth limit (e.g., max 5 levels) is probably sufficient.
 
 - **Awareness digest content filtering.** Should the digest filter by relevance to the current work item? A simple approach: include everything within the lookback window. A smarter approach: use embedding similarity between the current work item's description and recent findings to rank relevance. The simple approach is probably right for now — the LLM is good at ignoring irrelevant context.
 

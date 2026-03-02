@@ -12,19 +12,23 @@ The predecessor system used filesystem-based storage (YAML task queues, markdown
 
 ### 1. Work Has Identity
 
-A work item has semantic identity. "Check in with Kelly" is the same work whether it came from a user request, an extracted initiative, or a heartbeat skill. **Structural dedup** on `(work_type, dedup_key)` collapses duplicates transactionally. Semantic dedup (embedding-based) is a future extension.
+A work item has semantic identity. "Check in with Kelly" is the same work whether it came from a user request, an extracted initiative, or a heartbeat skill. **Structural dedup** on `(faculty, dedup_key)` collapses duplicates transactionally. Semantic dedup (embedding-based) is a future extension.
 
 ### 2. Work, Not Messages
 
-Work items don't have `from` or `to` fields. They have what needs doing (`work_type` + `params`), why it exists (`provenance`), priority, and lifecycle state. The caller says "this work needs doing" and the system figures out how.
+Work items have: which **faculty** handles them, which **skill** drives the methodology, **params** for the specific task, **provenance** (where it came from), **priority**, and lifecycle **state**. The caller says who should do this, how, and with what context.
 
 ### 3. Faculties and Foci, Not Fixed Processes
 
-A **faculty** is a cognitive specialization — Social, Initiative, Heartbeat, Radiate, Computer Use, or domain-specific. Faculties are **configuration, not code** — adding a faculty means adding a TOML file, not writing Rust.
+A **faculty** is a cognitive specialization — Social, Initiative, Heartbeat, Radiate, Engineer, or domain-specific. Faculties are **configuration, not code** — adding a faculty means adding a TOML file, not writing Rust. The faculty provides infrastructure: model, tools, concurrency mode, isolation strategy.
 
-A **focus** is a single activation of a faculty on a specific work item. Ephemeral, atomic, self-contained. Four phases: Orient → Engage → Consolidate → Recover. Orient and consolidate are external hooks (any executable). Engage is a built-in agentic loop configured by the faculty. Recover handles failures.
+A **focus** is a single activation of a faculty on a specific work item. Ephemeral, atomic, self-contained. Four phases: Orient → Engage → Consolidate → Recover.
 
-**Concurrency is separated into capability and allocation.** The faculty declares *whether* it supports parallel foci and *how* they're isolated (e.g., git worktrees for engineering work). The control plane decides *how many* to run based on global resource limits and the work queue's dependency graph. A Social faculty may declare `concurrent = false` because foci share relational state. An Engineer faculty declares `concurrent = true, isolation = worktree` because independent implementation work can fully parallelize in isolated branches.
+**The work item specifies the faculty directly** — no routing table, no `accepts` list. The submitter says `faculty: "engineer"` and the control plane dispatches to that faculty.
+
+**Skills provide methodology.** The work item carries a `skill` field that tells the engage loop *how* to work. The same faculty can execute different skills: `tdd-implementation` for building, `systematic-debugging` for fixing, `code-review` for reviewing. Skills are cross-faculty — any faculty that writes code can use the TDD skill.
+
+**Concurrency is separated into capability and allocation.** The faculty declares *whether* it supports parallel foci and *how* they're isolated (e.g., git worktrees). The control plane decides *how many* to run based on global resource limits.
 
 ### 4. Work-Once Guarantee
 
@@ -32,7 +36,7 @@ A work item is claimed by exactly one focus (pgmq visibility timeout). Duplicate
 
 ### 5. Postgres Is the Platform
 
-Postgres with pgmq + pgvector is a deliberate choice, not a swappable backend. Queue semantics, vector search, transactional guarantees, and the work ledger all live in one database. One operational dependency.
+Postgres with pgmq + pgvector is a deliberate choice, not a swappable backend. Queue semantics, vector search, transactional guarantees, the work ledger, and orient/consolidate context all live in one database. One operational dependency. All phase communication goes through the database — not the filesystem.
 
 ### 6. Observability Is Product
 
@@ -47,20 +51,20 @@ Every animus ships with integrated three-signal OTel observability (traces, metr
 │  ANIMUS APPLIANCE                                                     │
 │                                                                       │
 │  ┌─ Control Plane ──────────────────────────────────────────────────┐ │
-│  │  Queue watching (pg_notify), faculty routing, capacity mgmt      │ │
-│  │  Spawns foci when work is ready and faculty has capacity          │ │
+│  │  Queue watching (pg_notify), faculty dispatch, capacity mgmt      │ │
+│  │  Reads faculty name from work item, dispatches to matching faculty │ │
 │  └──────────────────────────────────────────────────────────────────┘ │
 │           │                                                           │
 │  ┌─ Focus (one activation on one work item) ────────────────────────┐ │
 │  │  Orient → Engage → Consolidate (→ Recover on failure)            │ │
 │  │                                                                   │ │
-│  │  Orient:  External hook + awareness digest injection              │ │
-│  │  Engage:  Built-in agentic loop (LLM + tools + ledger + sandbox) │ │
-│  │  Consolidate: External hook (reads ledger, creates memories/skills)│ │
+│  │  Orient:  External hook — writes context to DB (awareness digest) │ │
+│  │  Engage:  Built-in agentic loop (LLM + skill + tools + ledger)   │ │
+│  │  Consolidate: External hook — reads ledger from DB                │ │
 │  └──────────────────────────────────────────────────────────────────┘ │
 │           │                                                           │
 │  ┌─ Data Plane (Postgres) ──────────────────────────────────────────┐ │
-│  │  work_items (lifecycle, dedup, parent-child)                      │ │
+│  │  work_items (faculty, skill, lifecycle, dedup, parent-child)      │ │
 │  │  work_ledger (durable working memory per work item)               │ │
 │  │  pgmq queues (claim, visibility timeout, dead letter)             │ │
 │  │  memories (pgvector embeddings, hybrid BM25+vector search)        │ │
@@ -81,7 +85,7 @@ Each subsystem has a detailed design document. DESIGN.md is the high-level overv
 
 ### Data Plane — [docs/db.md](docs/db.md)
 
-Postgres schema, SQLx migrations, two-layer data access (direct SQLx for queues/work items, rig-postgres for vector search). Work item lifecycle, structural dedup, pgmq operations, memory storage and hybrid search.
+Postgres schema, SQLx migrations, two-layer data access (direct SQLx for queues/work items, rig-postgres for vector search). Work item lifecycle, structural dedup on `(faculty, dedup_key)`, pgmq operations, memory storage and hybrid search.
 
 ### Work Ledger — [docs/ledger.md](docs/ledger.md)
 
@@ -89,33 +93,42 @@ Postgres-backed durable working memory for the agentic loop. Append-only typed e
 
 ### Engage Phase — [docs/engage.md](docs/engage.md)
 
-The agentic loop architecture. Five interconnected concerns:
-
-1. **Bounded sub-contexts** — agent-declared context scoping via `ledger_append(step)` entries. Closed blocks are replaced with their ledger stubs. The open block is preserved verbatim.
-2. **Parallel tool execution** — multiple `tool_use` blocks execute concurrently via `tokio::JoinSet`.
-3. **Child work items** — async delegation via the work queue. `spawn_child_work` creates a child with its own focus, ledger, and context window. `await_child_work` blocks via `pg_notify`.
-4. **The awareness digest** — engine-level cross-faculty coherence. Assembled at orient from `work_items` + `work_ledger`. Shows running siblings, recent completions, and cross-faculty findings. Default-on because coherence is the baseline.
-5. **Code execution sandbox** — Docker-based Python sandbox for programmatic tool composition. The agent writes code that calls tools as functions; the code's return value (not raw tool output) enters context. Handles output management, multi-step composition, conditional logic, and agent-controlled timeouts.
-
-The engage phase is a built-in engine loop, not an external process. Orient, consolidate, and recover remain external hooks. An escape hatch (`mode = "external"`) allows faculties to override the built-in loop.
+The agentic loop architecture. The engage loop is a generic iteration engine — LLM call, tool execution, repeat. All behavioral specificity comes from the **skill** activated for the work item. Five infrastructure concerns: bounded sub-contexts, parallel tool execution, child work items, the awareness digest, and the code execution sandbox.
 
 ### Skills — [docs/skills.md](docs/skills.md)
 
-Progressive discovery, runtime activation, and autopoietic evolution. Three levels:
-
-1. **Runtime skills** — YAML frontmatter + markdown body, discovered and activated during the engage loop. Auto-activation during orient based on work type triggers.
-2. **Autopoietic skills** — created by the agent from its own experience. The consolidate hook detects recurring ledger patterns and encodes them as skills for future foci.
-3. **System skills** — composable code modifications (nanoclaw-style) that extend the system with new tools, faculties, or hooks. Future.
-
-Engine tools: `discover_skills`, `activate_skill`, `create_skill`. Skill scripts callable from the code execution sandbox.
+Skills are methodology — they tell the engage loop *how* to work. Progressive discovery, runtime activation, and autopoietic evolution. The work item's `skill` field determines which skill is activated. Skills are flat (not namespaced by faculty) because methodology is orthogonal to infrastructure.
 
 ### LLM Abstraction — [docs/llm.md](docs/llm.md)
 
-Thin, provider-specific HTTP clients replacing rig-core for LLM calls. `LlmClient` trait with two methods: `complete` and `complete_stream`. Anthropic Messages API and OpenAI Chat Completions API implementations, ~400-500 lines total. Raw `reqwest` + SSE parsing, no framework.
+Thin, provider-specific HTTP clients. `LlmClient` trait with two methods: `complete` and `complete_stream`. The engage loop calls it directly — one call per iteration.
 
-The engage loop calls `LlmClient` directly — one call per iteration. The client makes HTTP requests and returns data. All orchestration (context management, tool execution, ledger, hooks) lives in the engage loop, not in the LLM abstraction.
+### CLI — [docs/cli.md](docs/cli.md)
 
-rig-postgres retained for pgvector/embedding search.
+Operator interface. `animus serve` (daemon), `animus work submit/list/show` (work management), `animus ledger show/append` (future).
+
+### Operations — [docs/ops.md](docs/ops.md)
+
+Observability stack, backups, alerting, multi-instance deployment, configuration reference.
+
+---
+
+## Work Item
+
+A work item carries everything the system needs to execute it:
+
+| Field | Purpose |
+|---|---|
+| `faculty` | Which faculty handles this (replaces `work_type` routing) |
+| `skill` | Which skill drives the methodology (e.g., `tdd-implementation`) |
+| `dedup_key` | Structural dedup within the faculty |
+| `params` | Task-specific context (spec path, description, etc.) |
+| `provenance` | Where it came from (source + trigger) |
+| `priority` | Urgency (higher = more urgent) |
+| `state` | Lifecycle position |
+| `parent_id` | If spawned by another work item |
+
+Dedup is on `(faculty, dedup_key)`. The submitter specifies the faculty directly — no routing table.
 
 ---
 
@@ -131,17 +144,6 @@ Created → Dedup Check → Queued → Claimed → Running → Completed
                                           Dead
 ```
 
-| State | Meaning |
-|---|---|
-| **Created** | Submitted, pending dedup check |
-| **Queued** | In pgmq, waiting for a focus |
-| **Claimed** | Focus assigned via pgmq read (visibility timeout) |
-| **Running** | Focus actively processing |
-| **Completed** | Done successfully |
-| **Failed** | Execution error, may be retried |
-| **Dead** | Exhausted retries or poisoned — terminal |
-| **Merged** | Structural dedup hit — linked to canonical item, terminal |
-
 Transitions enforced by `State::can_transition_to()`.
 
 ---
@@ -156,10 +158,12 @@ Orient → Engage → Consolidate
 
 | Phase | Driver | Purpose |
 |---|---|---|
-| **Orient** | External hook | Gather context, inject awareness digest, auto-activate skills |
-| **Engage** | Built-in engine loop | Agentic tool-use iteration with ledger, sandbox, child work |
-| **Consolidate** | External hook | Integrate results: store memories, create skills, emit follow-up work |
+| **Orient** | External hook | Gather context, write to DB, inject awareness digest |
+| **Engage** | Built-in engine loop | Activate skill, iterate with LLM + tools + ledger |
+| **Consolidate** | External hook | Read ledger from DB, store memories, create skills |
 | **Recover** | External hook | Assess failure, decide retry or dead-letter |
+
+All phase communication goes through Postgres — not the filesystem. The focus directory is scratch space only.
 
 ---
 
@@ -168,10 +172,8 @@ Orient → Engage → Consolidate
 Faculties are TOML — configuration, not code:
 
 ```toml
-# A faculty that doesn't parallelize (shared relational state)
 [faculty]
 name = "social"
-accepts = ["engage", "respond", "check-in"]
 concurrent = false
 
 [faculty.orient]
@@ -179,7 +181,6 @@ command = "scripts/social-orient"
 
 [faculty.engage]
 model = "claude-sonnet-4-5-20250514"
-system_prompt_file = "prompts/social.md"
 tools = ["memory-search", "calendar", "send-message"]
 max_turns = 50
 
@@ -196,19 +197,13 @@ backoff = "exponential"
 ```
 
 ```toml
-# A faculty that parallelizes with git worktree isolation
 [faculty]
 name = "engineer"
-accepts = ["implement", "fix", "refactor", "test"]
 concurrent = true
 isolation = "worktree"
 
-[faculty.orient]
-command = "scripts/engineer-orient"
-
 [faculty.engage]
 model = "claude-sonnet-4-5-20250514"
-system_prompt_file = "prompts/engineer.md"
 tools = ["read_file", "write_file", "edit_file", "bash", "grep", "glob"]
 max_turns = 100
 code_execution = true
@@ -225,13 +220,7 @@ max_attempts = 2
 backoff = "exponential"
 ```
 
-See [docs/engage.md](docs/engage.md) for the complete configuration reference.
-
----
-
-## Deployment and Operations — [docs/ops.md](docs/ops.md)
-
-One `docker compose up` starts a complete agent with integrated observability (Postgres, OTel Collector, Tempo, Loki, Prometheus, Grafana). Data lives on host-mounted volumes at `${ANIMUS_HOME}/data/${ANIMUS_INSTANCE}/`. Multiple instances run on one machine with isolated networks and data directories. See [docs/ops.md](docs/ops.md) for the full operational runbook: stack topology, backups, alerting, telemetry, multi-instance configuration.
+No `accepts` field — the work item specifies `faculty: "engineer"` directly. No `system_prompt_file` — the skill provides the methodology.
 
 ---
 
@@ -243,25 +232,26 @@ One `docker compose up` starts a complete agent with integrated observability (P
 - Semantic memory (pgvector, hybrid BM25+vector search)
 - Three-signal OTel pipeline with GenAI semantic conventions
 - Full observability stack (OTel Collector + Tempo + Prometheus + Loki + Grafana)
-- Docker Compose appliance with Postgres + observability
+- Docker Compose appliance with durable host-mounted volumes
 - Core types, state machine, test suite
 - Control plane, faculty system, focus lifecycle
+- CLI: `animus serve`, `animus work submit/list/show`
+- Engineer faculty (stub hooks, placeholder engage)
+- Grafana dashboard: Animus Work Queue (Postgres + Prometheus)
+- Unroutable work detection with metric + alert
 
 ### Designed (Not Yet Implemented)
 - Engage loop with bounded sub-contexts and parallel tools → [docs/engage.md](docs/engage.md)
 - Work ledger (Postgres-backed durable working memory) → [docs/ledger.md](docs/ledger.md)
-- Code execution sandbox → [docs/engage.md](docs/engage.md) § 5
-- Child work items (async delegation) → [docs/engage.md](docs/engage.md) § 3
-- Awareness digest (cross-faculty coherence) → [docs/engage.md](docs/engage.md) § 4
 - Skills system (discovery, activation, autopoiesis) → [docs/skills.md](docs/skills.md)
 - Thin LLM client (replacing rig-core for completions) → [docs/llm.md](docs/llm.md)
+- DB-based orient/consolidate (replacing filesystem protocol)
+- `faculty` + `skill` fields on work items (replacing `work_type` routing)
 
 ### Open Design Questions
 - **Semantic dedup**: embedding similarity threshold, when to invoke, cost control
 - **Priority formula**: system-provided age boost, or fully host-controlled?
 - **Embedding provider**: separate from LLM provider; need to evaluate options
-- **Awareness digest freshness**: refresh during long foci, or orient-time only?
-- **Skill sharing across animi**: fleet skill propagation and identity implications
 
 See the open questions sections in each subsystem doc for domain-specific questions.
 
@@ -269,4 +259,4 @@ See the open questions sections in each subsystem doc for domain-specific questi
 
 ## Research
 
-- [docs/research/microclaw/agent.md](docs/research/microclaw/agent.md) — Deep analysis of MicroClaw's agent loop (tool system, hooks, permissions, context management, LLM integration). Informed the engage loop and ledger designs.
+- [docs/research/microclaw/agent.md](docs/research/microclaw/agent.md) — Deep analysis of MicroClaw's agent loop. Informed the engage loop and ledger designs.

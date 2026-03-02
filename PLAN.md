@@ -662,9 +662,9 @@ fn skill_manager_discovers_skills_from_directory() {
 }
 
 #[test]
-fn skill_trigger_matches_work_type() {
-    // Skill with triggers.work_types = ["engage"]
-    // matches("engage") → true, matches("analyze") → false
+fn skill_trigger_matches_faculty() {
+    // Skill with triggers.faculties = ["engineer"]
+    // matches("engineer") → true, matches("social") → false
 }
 
 #[test]

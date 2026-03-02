@@ -35,21 +35,23 @@ animus serve [--faculties DIR] [--max-concurrent N]
 Submit a work item to the queue.
 
 ```
-animus work submit <work_type> <source> [OPTIONS]
+animus work submit <faculty> <source> [OPTIONS]
 ```
 
 | Argument / Flag | Required | Description |
 |---|---|---|
-| `<work_type>` | yes | The work type (determines faculty routing) |
+| `<faculty>` | yes | Which faculty handles this work |
 | `<source>` | yes | Provenance source (e.g., "bootstrap", "heartbeat", "user") |
+| `--skill` | no | Skill that drives the methodology (e.g., "tdd-implementation") |
 | `--dedup-key` | no | Structural dedup key |
 | `--trigger` | no | Provenance trigger info |
 | `--params` | no | JSON object with work parameters |
 | `--priority` | no | Priority (default: 0, higher = more urgent) |
 
 ```sh
-# Submit the first bootstrap work item
-animus work submit implement bootstrap \
+# Submit a work item to the engineer faculty with the TDD skill
+animus work submit engineer bootstrap \
+  --skill "tdd-implementation" \
   --dedup-key "milestone=M4-work-ledger" \
   --trigger "PLAN.md" \
   --priority 10 \
@@ -69,17 +71,17 @@ animus work list [OPTIONS]
 | Flag | Default | Description |
 |---|---|---|
 | `--state` | all | Filter by state (queued, running, completed, failed, dead, merged) |
-| `--type` | all | Filter by work_type |
+| `--faculty` | all | Filter by faculty |
 | `--limit` | 20 | Max items to show |
 | `--parent` | none | Show children of a specific work item |
 
 ```sh
 animus work list
 animus work list --state queued
-animus work list --type implement
+animus work list --faculty engineer
 ```
 
-Output: table with id (short), work_type, state, dedup_key, created_at.
+Output: table with id (short), faculty, skill, state, dedup_key, created_at.
 
 ### `animus work show`
 
@@ -139,26 +141,25 @@ animus faculty list [--dir DIR]
 
 ```sh
 $ animus faculty list
-NAME        ACCEPTS                              CONCURRENT  ISOLATION
-engineer    implement, fix, refactor, test       true        worktree
-social      engage, respond, check-in            false       -
-transform   transform                            false       -
+NAME        CONCURRENT  ISOLATION
+engineer    true        worktree
+social      false       -
 ```
 
 ### `animus status`
 
-Show the appliance status: database connectivity, queue depth, active foci, registered faculties, unroutable work types.
+Show the appliance status: database connectivity, queue depth, active foci, registered faculties, unroutable work.
 
 ```
 animus status
 ```
 
 ```
-Database:    connected (13 work items, 2 memories)
-Queue:       2 messages (1 visible, 1 in-flight)
-Faculties:   1 registered (transform)
+Database:    connected (28 work items, 2 memories)
+Queue:       4 messages (3 visible, 1 in-flight)
+Faculties:   1 registered (engineer)
 Active foci: 0 / 4
-Unroutable:  1 work type (implement — no faculty)
+Unroutable:  3 items (no matching faculty)
 ```
 
 ---

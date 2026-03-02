@@ -97,7 +97,8 @@ CREATE TABLE work_items (
     id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     pgmq_msg_id     BIGINT,
     queue_name      TEXT NOT NULL,
-    work_type       TEXT NOT NULL,
+    faculty         TEXT NOT NULL,
+    skill           TEXT,
     dedup_key       TEXT,
     source          TEXT NOT NULL,
     trigger_info    TEXT,
@@ -116,13 +117,13 @@ CREATE TABLE work_items (
     resolved_at     TIMESTAMPTZ
 );
 
-CREATE INDEX idx_work_dedup ON work_items(work_type, dedup_key)
+CREATE INDEX idx_work_dedup ON work_items(faculty, dedup_key)
     WHERE dedup_key IS NOT NULL AND state NOT IN ('completed', 'dead', 'merged');
 CREATE INDEX idx_work_state ON work_items(state);
 CREATE INDEX idx_work_parent ON work_items(parent_id) WHERE parent_id IS NOT NULL;
 ```
 
-The `pgmq_msg_id` column links each work item to its pgmq message. The partial index on `(work_type, dedup_key)` covers only active items, keeping dedup lookups fast without indexing terminal states.
+The `faculty` field names the target faculty directly — no routing table. The `skill` field specifies the methodology (e.g., `tdd-implementation`). The partial index on `(faculty, dedup_key)` covers only active items, keeping dedup lookups fast without indexing terminal states.
 
 ### Migration 003: Memories
 

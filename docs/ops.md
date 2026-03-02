@@ -132,9 +132,9 @@ All metrics are prefixed with `animus_`:
 
 | Metric | Type | Labels | Description |
 |---|---|---|---|
-| `animus_work_submitted_total` | Counter | work_type, result | Work items submitted |
+| `animus_work_submitted_total` | Counter | faculty, result | Work items submitted |
 | `animus_work_state_transitions_total` | Counter | from, to | State transitions |
-| `animus_work_unroutable_total` | Counter | work_type | Work with no matching faculty |
+| `animus_work_unroutable_total` | Counter | faculty | Work with no matching faculty |
 | `animus_queue_operations_total` | Counter | queue, operation | pgmq operations |
 | `animus_memory_operations_total` | Counter | operation | Memory store operations |
 | `animus_llm_tokens_total` | Counter | model, provider, direction | LLM token usage |
@@ -144,7 +144,7 @@ All metrics are prefixed with `animus_`:
 
 ### Logs (Loki)
 
-All `tracing::info!`, `warn!`, `error!` calls are exported to Loki via the OTel log bridge. Structured fields (work_type, work_id, etc.) are preserved as log labels.
+All `tracing::info!`, `warn!`, `error!` calls are exported to Loki via the OTel log bridge. Structured fields (faculty, work_id, etc.) are preserved as log labels.
 
 **View in Grafana:** Explore → Loki → `{service_name="animus"}`
 

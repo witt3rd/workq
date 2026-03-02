@@ -107,7 +107,7 @@ description: >
   Guides relational check-ins — timing, tone, context gathering,
   memory integration, and follow-up scheduling.
 triggers:
-  work_types: ["engage", "check-in", "respond"]
+  faculties: ["engage", "check-in", "respond"]
   keywords: ["check in", "catch up", "reach out", "follow up"]
   params:                           # match against work item params
     person: "*"                     # any value for "person" param triggers
@@ -207,7 +207,7 @@ Three engine tools, always available (like ledger tools):
         "type": "string",
         "description": "Natural language query or keywords to match against skill descriptions and triggers."
       },
-      "work_type": {
+      "faculty": {
         "type": "string",
         "description": "Optional: filter to skills that trigger on this work type."
       },
@@ -279,7 +279,7 @@ On activation:
       },
       "triggers": {
         "type": "object",
-        "description": "Optional: work_types, keywords, and params that auto-activate this skill."
+        "description": "Optional: faculties, keywords, and params that auto-activate this skill."
       },
       "content": {
         "type": "string",
@@ -297,9 +297,9 @@ The engine writes the `SKILL.md` file with generated frontmatter and the provide
 
 During the orient phase, the engine can automatically discover and pre-activate skills:
 
-1. Read `work_type` and `params` from the work item
+1. Read `faculty` and `params` from the work item
 2. Scan all `SKILL.md` frontmatter for matching `triggers`:
-   - `work_types` match against the work item's `work_type`
+   - `faculties` match against the work item's `faculty`
    - `keywords` match against the work item's description/params
    - `params` match against specific work item parameter keys/values
 3. Filter by `faculties` — only skills available to the current faculty
@@ -330,13 +330,13 @@ WHERE work_item_id = $1 AND entry_type = 'finding'
 ORDER BY seq;
 
 -- Similar findings from recent foci (pattern detection)
-SELECT w.work_type, wl.content, count(*) as occurrences
+SELECT w.faculty, wl.content, count(*) as occurrences
 FROM work_ledger wl
 JOIN work_items w ON w.id = wl.work_item_id
 WHERE wl.entry_type = 'finding'
     AND wl.created_at > now() - interval '7 days'
     AND wl.content ILIKE '%' || $pattern || '%'
-GROUP BY w.work_type, wl.content
+GROUP BY w.faculty, wl.content
 HAVING count(*) >= 3
 ORDER BY occurrences DESC;
 ```
@@ -683,7 +683,7 @@ Activated skills with `scripts/` directories are importable in the sandbox:
 
 Child work items can activate different skills than their parent:
 - Parent (Social) activates `check-in-with-person` and `kelly-relationship`
-- Parent spawns child (Computer Use) with `work_type: "analyze"`
+- Parent spawns child (Computer Use) with `faculty: "analyze"`
 - Child's orient auto-activates `analyze-codebase` — different skill set for different work
 - This is natural: different work types trigger different skills, and child work has its own work type
 
