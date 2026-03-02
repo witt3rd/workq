@@ -1,0 +1,17 @@
+[faculty]
+name = "engineer"
+accepts = ["implement", "fix", "refactor", "test"]
+max_concurrent = 1
+
+[faculty.orient]
+command = "scripts/engineer/orient.sh"
+
+[faculty.engage]
+command = "scripts/engineer/engage.sh"
+
+[faculty.consolidate]
+command = "scripts/engineer/consolidate.sh"
+
+[faculty.recover]
+command = "scripts/engineer/recover.sh"
+max_attempts = 2
