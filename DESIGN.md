@@ -229,23 +229,9 @@ See [docs/engage.md](docs/engage.md) for the complete configuration reference.
 
 ---
 
-## Deployment
+## Deployment and Operations — [docs/ops.md](docs/ops.md)
 
-### The Animus Appliance
-
-One `docker compose up` starts a complete agent with integrated observability:
-
-| Container | Purpose |
-|---|---|
-| **animus-rs** | The agent service |
-| **postgres** | Postgres + pgmq + pgvector |
-| **otel-collector** | OTLP ingestion |
-| **tempo** | Trace storage |
-| **loki** | Log aggregation |
-| **prometheus** | Metrics storage |
-| **grafana** | Unified observability UI |
-
-Fleet deployment uses a shared observer stack (`docker-compose.observer.yml`). See [docs/db.md](docs/db.md) for database configuration and schema details.
+One `docker compose up` starts a complete agent with integrated observability (Postgres, OTel Collector, Tempo, Loki, Prometheus, Grafana). Data lives on host-mounted volumes at `${ANIMUS_HOME}/data/${ANIMUS_INSTANCE}/`. Multiple instances run on one machine with isolated networks and data directories. See [docs/ops.md](docs/ops.md) for the full operational runbook: stack topology, backups, alerting, telemetry, multi-instance configuration.
 
 ---
 
